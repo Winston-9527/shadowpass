@@ -9,3 +9,4 @@ cache/
 .env.*
 .DS_Store
 artifacts/
+apps/wallet/public/zk/

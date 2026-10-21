@@ -1,15 +1,113 @@
 
-> test
+> @shadowpass/circuits@0.0.0 test
 > node --no-warnings scripts/test.mjs
+
+ERROR:  4 Error in template ShadowChain_496 line: 109
+
+ERROR:  4 Error in template ShadowChain_496 line: 113
+
+ERROR:  4 Error in template ShadowChain_419 line: 104
+
+ERROR:  4 Error in template CapSubset_417 line: 25
+Error in template ShadowChain_496 line: 176
+
+ERROR:  4 Error in template CapSubset_417 line: 25
+Error in template ShadowChain_496 line: 176
+
+ERROR:  4 Error in template ShadowRevokeTransition_319 line: 68
+
+ERROR:  4 Error in template ShadowRevokeTransition_319 line: 62
+
+ERROR:  4 Error in template ShadowRevokeTransition_319 line: 89
+
+ERROR:  4 Error in template ShadowRevokeTransition_319 line: 85
+
+ERROR:  4 Error in template BudgetMint_78 line: 13
+
+ERROR:  4 Error in template BudgetTransfer_327 line: 58
+
+ERROR:  4 Error in template BudgetTransfer_327 line: 89
+
+ERROR:  4 Error in template AccHybridCompressed_415 line: 18
+Error in template ShadowChain_496 line: 154
+
+ERROR:  4 Error in template AccHybridCompressed_415 line: 18
+Error in template ShadowChain_496 line: 154
+
+ERROR:  4 Error in template AccHybridCompressed_415 line: 28
+Error in template ShadowChain_496 line: 154
+
+ERROR:  4 Error in template AccHybridCompressed_415 line: 23
+Error in template ShadowChain_496 line: 154
+
+ERROR:  4 Error in template AccHybridCompressed_415 line: 23
+Error in template ShadowChain_496 line: 154
+
+ERROR:  4 Error in template AccHybridCompressed_415 line: 23
+Error in template ShadowChain_496 line: 154
+
+ERROR:  4 Error in template AccHybridCompressed_415 line: 18
+Error in template ShadowChain_496 line: 154
+
+ERROR:  4 Error in template ForceEqualIfEnabled_173 line: 56
+Error in template EdDSAPoseidonVerifier_174 line: 117
+Error in template ShadowChain_496 line: 101
+
+ERROR:  4 Error in template BabyCheck_0 line: 82
+Error in template OwnerViewKey_3 line: 9
+Error in template ShadowChain_496 line: 68
+
+ERROR:  4 Error in template OwnerViewKey_3 line: 15
+Error in template ShadowChain_419 line: 68
+
+ERROR:  4 Error in template OwnerViewKey_3 line: 15
+Error in template ShadowChain_419 line: 68
+
+ERROR:  4 Error in template ForceEqualIfEnabled_173 line: 56
+Error in template EdDSAPoseidonVerifier_174 line: 117
+Error in template ShadowChain_496 line: 101
+
+ERROR:  4 Error in template ForceEqualIfEnabled_173 line: 56
+Error in template EdDSAPoseidonVerifier_174 line: 117
+Error in template ShadowChain_496 line: 101
+
+ERROR:  4 Error in template ForceEqualIfEnabled_173 line: 56
+Error in template EdDSAPoseidonVerifier_174 line: 117
+Error in template ShadowChain_419 line: 101
+
+ERROR:  4 Error in template ShadowRegister_242 line: 51
+
+ERROR:  4 Error in template ShadowRegister_242 line: 51
+
+ERROR:  4 Error in template IMTPath_317 line: 39
+Error in template IMTNonMember_318 line: 73
+Error in template ShadowChain_496 line: 119
 
 PASS  D1 steward pays (honest)                                         expect ACCEPT, got ACCEPT
 PASS  D2 procurement pays (honest)                                     expect ACCEPT, got ACCEPT
+PASS  D3 downstream agent pays (honest)                                expect ACCEPT, got ACCEPT
 PASS  owner opens D2 ciphertext with vsk -> Alice, steward, procurement expect ACCEPT, got ACCEPT
 PASS  another key cannot open the ciphertext                           expect REJECT, got REJECT
 PASS  registration (honest)                                            expect ACCEPT, got ACCEPT
-PASS  procurement {PAY} asks for TREASURY                              expect REJECT, got REJECT @ CapSubset L44
+PASS  issued-tree depth > 20                                           expect REJECT, got REJECT @ ShadowChain L109
+PASS  hop1 certificate absent from issued tree                         expect REJECT, got REJECT @ ShadowChain L113
+PASS  hop0 issued-tree depth must be zero                              expect REJECT, got REJECT @ ShadowChain L104
+PASS  procurement {PAY} asks for TREASURY                              expect REJECT, got REJECT @ CapSubset L25
 PASS  treasury {TREASURY} supplies to vault                            expect ACCEPT, got ACCEPT
-PASS  treasury {TREASURY} tries to pay a merchant (PAY)                expect REJECT, got REJECT @ CapSubset L44
+PASS  treasury {TREASURY} tries to pay a merchant (PAY)                expect REJECT, got REJECT @ CapSubset L25
+PASS  Alice (issuer) revokes cert0                                     expect ACCEPT, got ACCEPT
+PASS  steward (issuer) revokes cert1                                   expect ACCEPT, got ACCEPT
+PASS  buyer (holder) revokes incoming cert1                            expect ACCEPT, got ACCEPT
+PASS  buyer revokes its own key entry                                  expect ACCEPT, got ACCEPT
+PASS  non-issuer, non-holder revokes cert1                             expect REJECT, got REJECT @ ShadowRevokeTransition L68
+PASS  revoke legacy Poseidon7 root certificate                         expect REJECT, got REJECT @ ShadowRevokeTransition L62
+PASS  revoke wrong new_root + 1                                        expect REJECT, got REJECT @ ShadowRevokeTransition L89
+PASS  revoke occupied insertion position                               expect REJECT, got REJECT @ ShadowRevokeTransition L85
+PASS  budget mint opens to q                                           expect ACCEPT, got ACCEPT
+PASS  budget mint wrong public q                                       expect REJECT, got REJECT @ BudgetMint L13
+PASS  budget transfer delegates to cert1                               expect ACCEPT, got ACCEPT
+PASS  budget transfer breaks conservation                              expect REJECT, got REJECT @ BudgetTransfer L58
+PASS  budget transfer wrong delegated note                             expect REJECT, got REJECT @ BudgetTransfer L89
 PASS  tamper own_c1x + 1                                               expect REJECT, got REJECT @ AccHybridCompressed L18
 PASS  tamper own_c2x + 1                                               expect REJECT, got REJECT @ AccHybridCompressed L18
 PASS  tamper own_esign + 1                                             expect REJECT, got REJECT @ AccHybridCompressed L28
@@ -28,5 +126,6 @@ PASS  registration: own_w of another key (leaf0 mismatch)              expect RE
 PASS  registration: leaf0 + 1                                          expect REJECT, got REJECT @ ShadowRegister L51
 PASS  procurement certificate revoked (stale witness, new root)        expect REJECT, got REJECT @ IMTPath L39
 PASS  no fresh non-membership witness exists for a revoked certificate expect REJECT, got REJECT
+PASS  revoked lineage cannot move existing budget                      expect REJECT, got REJECT
 
-26 / 26 as expected
+44 / 44 as expected

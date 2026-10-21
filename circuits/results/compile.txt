@@ -1,6 +1,25 @@
-main_d1 # of Constraints: 60801
-main_d1 # of Public Inputs: 15
-main_d2 # of Constraints: 105606
-main_d2 # of Public Inputs: 16
-main_reg # of Constraints: 17608
-main_reg # of Public Inputs: 4
+
+> @shadowpass/circuits@0.0.0 build
+> bash scripts/build.sh
+
+main_d1 [32;22m[INFO]  [39;1msnarkJS[0m: # of Constraints: 60801
+main_d1 [32;22m[INFO]  [39;1msnarkJS[0m: # of Private Inputs: 174
+main_d1 [32;22m[INFO]  [39;1msnarkJS[0m: # of Public Inputs: 15
+main_d2 [32;22m[INFO]  [39;1msnarkJS[0m: # of Constraints: 107793
+main_d2 [32;22m[INFO]  [39;1msnarkJS[0m: # of Private Inputs: 246
+main_d2 [32;22m[INFO]  [39;1msnarkJS[0m: # of Public Inputs: 16
+main_d3 [32;22m[INFO]  [39;1msnarkJS[0m: # of Constraints: 154785
+main_d3 [32;22m[INFO]  [39;1msnarkJS[0m: # of Private Inputs: 361
+main_d3 [32;22m[INFO]  [39;1msnarkJS[0m: # of Public Inputs: 17
+main_reg [32;22m[INFO]  [39;1msnarkJS[0m: # of Constraints: 17608
+main_reg [32;22m[INFO]  [39;1msnarkJS[0m: # of Private Inputs: 29
+main_reg [32;22m[INFO]  [39;1msnarkJS[0m: # of Public Inputs: 4
+main_revoke [32;22m[INFO]  [39;1msnarkJS[0m: # of Constraints: 53077
+main_revoke [32;22m[INFO]  [39;1msnarkJS[0m: # of Private Inputs: 75
+main_revoke [32;22m[INFO]  [39;1msnarkJS[0m: # of Public Inputs: 4
+budget_transfer [32;22m[INFO]  [39;1msnarkJS[0m: # of Constraints: 84008
+budget_transfer [32;22m[INFO]  [39;1msnarkJS[0m: # of Private Inputs: 255
+budget_transfer [32;22m[INFO]  [39;1msnarkJS[0m: # of Public Inputs: 5
+budget_mint [32;22m[INFO]  [39;1msnarkJS[0m: # of Constraints: 1236
+budget_mint [32;22m[INFO]  [39;1msnarkJS[0m: # of Private Inputs: 7
+budget_mint [32;22m[INFO]  [39;1msnarkJS[0m: # of Public Inputs: 2

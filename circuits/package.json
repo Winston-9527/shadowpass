@@ -5,6 +5,7 @@
   "scripts": {
     "build": "bash scripts/build.sh",
     "setup": "bash scripts/setup.sh",
+    "publish-artifacts": "bash scripts/publish-artifacts.sh",
     "test": "node --no-warnings scripts/test.mjs"
   },
   "dependencies": {

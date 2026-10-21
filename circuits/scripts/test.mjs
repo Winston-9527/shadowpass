@@ -31,6 +31,8 @@ const a1 = w.actionInput({ chain: [c0], holderSk: steward.sk, note: nSteward, qS
 check("D1 steward pays (honest)", await sat("main_d1", a1.input), true);
 const a2 = w.actionInput({ chain: [c0, c1], holderSk: buyer.sk, note: nBuyer, qSpent: 8, ctxHash: ctx, reqCap: PAY, now });
 check("D2 procurement pays (honest)", await sat("main_d2", a2.input), true);
+const downstream = w.newIdentity(), c2 = w.issue(c1, downstream, PAY, 8_000), nDownstream = w.mintNote([c0, c1, c2], 20);
+check("D3 downstream agent pays (honest)", await sat("main_d3", w.actionInput({ chain: [c0, c1, c2], holderSk: downstream.sk, note: nDownstream, qSpent: 5, ctxHash: ctx, reqCap: PAY, now }).input), true);
 const opened = openChain(ownerCtOfInput(a2.input), vk.vsk);
 const okOpen = !!opened && opened.every((p, j) => String(p[0]) === a2.input.ent_Ax[j] && String(p[1]) === a2.input.ent_Ay[j]);
 check("owner opens D2 ciphertext with vsk -> Alice, steward, procurement", { ok: okOpen }, true);
@@ -38,12 +40,38 @@ check("another key cannot open the ciphertext", { ok: !!openChain(ownerCtOfInput
 const reg = w.registerInput({ human: alice, cert0: c0, domain: 7n });
 check("registration (honest)", await sat("main_reg", reg), true);
 
+// ---- LeanIMT issued-tree boundaries ----
+{ const i = clone(a2.input); i.m_depth[1] = "21"; check("issued-tree depth > 20", await sat("main_d2", i), false); }
+{ const i = clone(a2.input); i.m_sib[1] = Array(20).fill("0"); i.m_index[1] = "0"; check("hop1 certificate absent from issued tree", await sat("main_d2", i), false); }
+{ const i = clone(a1.input); i.m_depth[0] = "1"; check("hop0 issued-tree depth must be zero", await sat("main_d1", i), false); }
+
 // ---- capability split enforced by the circuit ----
 check("procurement {PAY} asks for TREASURY", await sat("main_d2", w.actionInput({ chain: [c0, c1], holderSk: buyer.sk, note: nBuyer, qSpent: 8, ctxHash: ctx, reqCap: TREASURY, now }).input), false);
 
 { const nVault = w.mintNote([c0, c1t], 50);
   check("treasury {TREASURY} supplies to vault", await sat("main_d2", w.actionInput({ chain: [c0, c1t], holderSk: vault.sk, note: nVault, qSpent: 30, ctxHash: ctx, reqCap: TREASURY, now }).input), true);
   check("treasury {TREASURY} tries to pay a merchant (PAY)", await sat("main_d2", w.actionInput({ chain: [c0, c1t], holderSk: vault.sk, note: nVault, qSpent: 30, ctxHash: ctx, reqCap: PAY, now }).input), false); }
+
+// ---- revocation authority and Poseidon9 root binding ----
+check("Alice (issuer) revokes cert0", await sat("main_revoke", w.revokeCertInput(c0, alice).input), true);
+check("steward (issuer) revokes cert1", await sat("main_revoke", w.revokeCertInput(c1, steward).input), true);
+check("buyer (holder) revokes incoming cert1", await sat("main_revoke", w.revokeCertInput(c1, buyer, 1).input), true);
+check("buyer revokes its own key entry", await sat("main_revoke", w.revokeKeyInput(buyer).input), true);
+check("non-issuer, non-holder revokes cert1", await sat("main_revoke", w.revokeCertInput(c1, vault).input), false);
+{ const { poseidon7 } = await import("poseidon-lite");
+  const legacy = poseidon7([0n, alice.Ax, alice.Ay, steward.Ax, steward.Ay, PAY | TREASURY, 10_000n]);
+  const i = w.revokeInput({ entry: legacy, kind: 1, who: 0, hop: 0, ia: [alice.Ax, alice.Ay], ha: [steward.Ax, steward.Ay], cap: PAY | TREASURY, expiry: 10_000n, sk: alice.sk, ownW: vk.w }).input;
+  check("revoke legacy Poseidon7 root certificate", await sat("main_revoke", i), false); }
+{ const t = w.revokeCertInput(c1, steward); t.input.new_root = bump(t.input.new_root); check("revoke wrong new_root + 1", await sat("main_revoke", t.input), false); }
+{ const t = w.revokeCertInput(c1, steward); t.input.next_index = "1"; check("revoke occupied insertion position", await sat("main_revoke", t.input), false); }
+
+// ---- budget mint / transfer ----
+check("budget mint opens to q", await sat("budget_mint", w.mintInput(nSteward)), true);
+{ const i = clone(w.mintInput(nSteward)); i.q = bump(i.q); check("budget mint wrong public q", await sat("budget_mint", i), false); }
+const transfer = w.transferInput({ holder: steward, holderSk: steward.sk, note: nSteward, child: c1, q1: 40, q2: 60 });
+check("budget transfer delegates to cert1", await sat("budget_transfer", transfer.input), true);
+{ const i = clone(transfer.input); i.q2 = bump(i.q2); check("budget transfer breaks conservation", await sat("budget_transfer", i), false); }
+{ const i = clone(transfer.input); i.cm_out1 = bump(i.cm_out1); check("budget transfer wrong delegated note", await sat("budget_transfer", i), false); }
 
 // ---- owner ciphertext tampering ----
 for (const f of ["own_c1x", "own_c2x", "own_esign"]) { const i = clone(a2.input); i[f] = bump(i[f]); check(`tamper ${f} + 1`, await sat("main_d2", i), false); }
@@ -83,6 +111,8 @@ for (const [name, wpt] of [["identity (0, 1)", [0n, 1n]], ["order-2 point (0, -1
   check("procurement certificate revoked (stale witness, new root)", await sat("main_d2", i), false);
   let threw = false; try { w.actionInput({ chain: [c0, c1], holderSk: buyer.sk, note: nBuyer, qSpent: 8, ctxHash: ctx, reqCap: PAY, now }); } catch { threw = true; }
   check("no fresh non-membership witness exists for a revoked certificate", { ok: !threw }, false); }
+{ let threw = false; try { w.transferInput({ holder: buyer, holderSk: buyer.sk, note: nBuyer, q1: 1, q2: 39 }); } catch { threw = true; }
+  check("revoked lineage cannot move existing budget", { ok: !threw }, false); }
 
 console.log(rows.join("\n")); console.log(`\n${rows.length - fail} / ${rows.length} as expected`); void L; void mul; void GEN;
 process.exit(fail ? 1 : 0);

@@ -37,8 +37,10 @@ template ShadowRevokeTransition(DEPTH) {
     who * (who - 1) === 0;
     (1 - kind) * who === 0;
 
-    component isRoot = IsZero(); isRoot.in <== hop;
-    component ovk = OwnerViewKeyIf(); ovk.en <== isRoot.out;
+    component isRootHop = IsZero(); isRootHop.in <== hop;
+    signal isRootCert;
+    isRootCert <== kind * isRootHop.out;
+    component ovk = OwnerViewKeyIf(); ovk.en <== isRootCert;
     ovk.w[0] <== own_w[0]; ovk.w[1] <== own_w[1];
 
     component rootCert = Poseidon(9);
@@ -53,7 +55,7 @@ template ShadowRevokeTransition(DEPTH) {
     cert.inputs[3] <== ha[0]; cert.inputs[4] <== ha[1];
     cert.inputs[5] <== cap; cert.inputs[6] <== expiry;
     signal certHash;
-    certHash <== cert.out + isRoot.out * (rootCert.out - cert.out);
+    certHash <== cert.out + isRootCert * (rootCert.out - cert.out);
 
     var KEY_TAG = 2053861995;
     component kh = Poseidon(3); kh.inputs[0] <== KEY_TAG; kh.inputs[1] <== ia[0]; kh.inputs[2] <== ia[1];
