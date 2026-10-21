@@ -1,5 +1,6 @@
 node_modules/
 build/
+dist/
 *.zkey
 *.ptau
 *.wtns
@@ -7,6 +8,7 @@ out/
 cache/
 .env
 .env.*
+!apps/wallet/.env.example
 .DS_Store
 artifacts/
 apps/wallet/public/zk/
@@ -14,3 +16,4 @@ apps/wallet/public/zk/
 packages/sdk/browser/dist/
 packages/sdk/browser/public/fixture.json
 packages/sdk/browser/public/zk/
+apps/wallet/e2e-output/
