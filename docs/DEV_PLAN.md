@@ -11,6 +11,7 @@
 | 新仓库、vendor 研究资产、基线（45/45 forge、冒烟、证明耗时） | ✅ `caf89e0`，见 `docs/BASELINE.md` |
 | x402 自定义 scheme spike（第 4 小时检查点） | ✅ 通过，`568452b`，不启用回退 |
 | A1 电路：主人密文 + 根凭证绑定查看公钥 | ✅ 26/26 负例、D2 105,606 约束、证明 1.57 s、verifier 291,606 gas，见 `circuits/README.md` |
+| A2 电路：签发树 LeanIMT + 吊销适配 + D3/预算电路 | ✅ #2，44/44 witness、7 电路各 5/5 真实证明且全部公开输入扰动拒绝，见 `circuits/README.md` |
 | 工单拆分（#2–#13，总览 #14）、README、`docs/INTERFACES.md`、`AGENTS.md` | ✅ |
 | 域名（passkey RP ID） | ✅ `shadowpass-wallet.vercel.app` |
 | monorepo 骨架、`docs/ARCHITECTURE.md`、CI | ✅ |

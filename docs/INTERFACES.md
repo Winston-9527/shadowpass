@@ -10,7 +10,7 @@
 | `L`（BabyJub 素数阶子群） | `2736030358979909402780800718157159386076813972158567259200215660948447373041` |
 | 能力位 | `PAY = 1 << 0`，`TREASURY = 1 << 1`（32 位，子凭证必须是父凭证的子集） |
 | 标签 | `KEY_TAG = 2053861995`（"zkrk"），`TAG_BNF = 2053857902`（"zkbn"），`TAG_REG = 2053858418`（"zkdr"） |
-| 树深度 | 签发树 `MD = 16`，撤销 IMT `RD = 20`，根凭证树 `RT = 20`，票据树 `NT = 20`，群组树 20 |
+| 树深度 | 签发树 `MD = 20`（LeanIMT，实际深度随叶子数变化，最大 20），撤销 IMT `RD = 20`，根凭证树 `RT = 20`，票据树 `NT = 20`，群组树 20 |
 | 网络 | Base Sepolia，chain id `84532`，CAIP-2 `eip155:84532` |
 | 钱包域名 / passkey RP ID | `shadowpass-wallet.vercel.app`（开发用 `localhost`），定了不改 |
 | 证明产物 | `https://shadowpass-wallet.vercel.app/zk/circuits-v<N>/`，按 MANIFEST 校验（见 `docs/ARCHITECTURE.md` §4） |
@@ -47,16 +47,22 @@ Agent 侧（MCP server）自己生成 `holder_prv`（32 字节）和 X25519 信�
 
 ## 4. 电路公开输入（顺序即 verifier 的 `pubSignals` 顺序）
 
-`main_d{D}`：
+`main_d{D}`（D=1/2/3，公开输入数分别为 15/16/17）：
 ```
 [0] state_root  [1] now  [2] ctx_hash  [3] act_req_cap
 [4] own_c1x  [5] own_c1y  [6] own_c2x  [7] own_c2y
 [8 .. 8+D] own_e[0..D]  [9+D] own_esign
 [10+D] note_root  [11+D] budget_nf  [12+D] cm_change  [13+D] q_spent
 ```
-D=1 共 15 个，D=2 共 16 个。主人密文 `ct = [own_c1x, own_c1y, own_c2x, own_c2y, own_e..., own_esign]`，长度 `D + 6`，合约按长度选 verifier。
+D=1/2/3 分别为 15/16/17 个。主人密文 `ct = [own_c1x, own_c1y, own_c2x, own_c2y, own_e..., own_esign]`，长度 `D + 6`，合约按长度选 verifier。
 
 `main_reg`：`[group_root, domain, nf_domain, leaf0]`。
+
+`main_revoke`：`[old_root, new_root, entry, next_index]`。
+
+`budget_transfer`：`[note_root, revoked_root, nullifier, cm_out1, cm_out2]`。
+
+`budget_mint`：`[cm, q]`。
 
 ## 5. Action 与 ctx_hash
 

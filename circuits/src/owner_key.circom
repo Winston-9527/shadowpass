@@ -26,7 +26,9 @@ template OwnerViewKeyIf() {
     signal x2; signal y2;
     x2 <== w[0] * w[0];
     y2 <== w[1] * w[1];
-    en * (168700 * x2 + y2 - 1 - 168696 * x2 * y2) === 0;
+    signal curve;
+    curve <== 168700 * x2 + y2 - 1 - 168696 * x2 * y2;
+    en * curve === 0;
 
     signal wx; signal wy;
     wx <== en * w[0];
@@ -36,5 +38,7 @@ template OwnerViewKeyIf() {
     component d3 = BabyDbl(); d3.x <== d2.xout; d3.y <== d2.yout;
     vpk[0] <== d3.xout; vpk[1] <== d3.yout;
     signal xinv; xinv <-- vpk[0] != 0 ? 1 / vpk[0] : 0;
-    en * xinv * vpk[0] === en;
+    signal xinvProduct;
+    xinvProduct <== xinv * vpk[0];
+    en * xinvProduct === en;
 }

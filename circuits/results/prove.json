@@ -10,14 +10,14 @@
       "public_inputs": 15,
       "binding": "15/15 perturbed public inputs rejected",
       "fullprove_ms": {
-        "mean": 947.5,
-        "sd": 43.5,
-        "median": 946.3
+        "mean": 915.5,
+        "sd": 63.3,
+        "median": 889
       },
       "verify_ms": {
-        "mean": 7.1,
-        "sd": 0.5,
-        "median": 7.1
+        "mean": 7.3,
+        "sd": 0.6,
+        "median": 7.4
       }
     },
     "main_d2": {
@@ -25,14 +25,29 @@
       "public_inputs": 16,
       "binding": "16/16 perturbed public inputs rejected",
       "fullprove_ms": {
-        "mean": 1578.4,
-        "sd": 26.4,
-        "median": 1566.7
+        "mean": 1572.5,
+        "sd": 30,
+        "median": 1560.5
       },
       "verify_ms": {
-        "mean": 5.4,
-        "sd": 0.6,
-        "median": 5.6
+        "mean": 6.1,
+        "sd": 0.5,
+        "median": 6
+      }
+    },
+    "main_d3": {
+      "verified": "5/5",
+      "public_inputs": 17,
+      "binding": "17/17 perturbed public inputs rejected",
+      "fullprove_ms": {
+        "mean": 2479.2,
+        "sd": 42.5,
+        "median": 2460.9
+      },
+      "verify_ms": {
+        "mean": 4.5,
+        "sd": 0.1,
+        "median": 4.5
       }
     },
     "main_reg": {
@@ -40,14 +55,59 @@
       "public_inputs": 4,
       "binding": "4/4 perturbed public inputs rejected",
       "fullprove_ms": {
-        "mean": 377.7,
-        "sd": 13.5,
-        "median": 374.2
+        "mean": 359.1,
+        "sd": 13.6,
+        "median": 362.7
       },
       "verify_ms": {
-        "mean": 6.9,
+        "mean": 6.5,
+        "sd": 0.4,
+        "median": 6.5
+      }
+    },
+    "main_revoke": {
+      "verified": "5/5",
+      "public_inputs": 4,
+      "binding": "4/4 perturbed public inputs rejected",
+      "fullprove_ms": {
+        "mean": 802.3,
+        "sd": 14.9,
+        "median": 800.8
+      },
+      "verify_ms": {
+        "mean": 5.4,
+        "sd": 0.2,
+        "median": 5.4
+      }
+    },
+    "budget_transfer": {
+      "verified": "5/5",
+      "public_inputs": 5,
+      "binding": "5/5 perturbed public inputs rejected",
+      "fullprove_ms": {
+        "mean": 1307,
+        "sd": 14,
+        "median": 1303.3
+      },
+      "verify_ms": {
+        "mean": 5.6,
         "sd": 0.6,
-        "median": 6.6
+        "median": 5.3
+      }
+    },
+    "budget_mint": {
+      "verified": "5/5",
+      "public_inputs": 2,
+      "binding": "2/2 perturbed public inputs rejected",
+      "fullprove_ms": {
+        "mean": 59.8,
+        "sd": 2.3,
+        "median": 58.9
+      },
+      "verify_ms": {
+        "mean": 5.1,
+        "sd": 0.1,
+        "median": 5.1
       }
     }
   }
