@@ -1,0 +1,18 @@
+{
+  "name": "@shadowpass/circuits",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bash scripts/build.sh",
+    "setup": "bash scripts/setup.sh",
+    "test": "node --no-warnings scripts/test.mjs"
+  },
+  "dependencies": {
+    "@zk-kit/binary-merkle-root.circom": "2.0.0",
+    "@zk-kit/lean-imt": "2.2.5",
+    "circomlib": "2.0.5",
+    "circomlibjs": "0.1.7",
+    "poseidon-lite": "0.3.0",
+    "snarkjs": "0.7.6"
+  }
+}

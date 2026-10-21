@@ -1,0 +1,32 @@
+
+> test
+> node --no-warnings scripts/test.mjs
+
+PASS  D1 steward pays (honest)                                         expect ACCEPT, got ACCEPT
+PASS  D2 procurement pays (honest)                                     expect ACCEPT, got ACCEPT
+PASS  owner opens D2 ciphertext with vsk -> Alice, steward, procurement expect ACCEPT, got ACCEPT
+PASS  another key cannot open the ciphertext                           expect REJECT, got REJECT
+PASS  registration (honest)                                            expect ACCEPT, got ACCEPT
+PASS  procurement {PAY} asks for TREASURY                              expect REJECT, got REJECT @ CapSubset L44
+PASS  treasury {TREASURY} supplies to vault                            expect ACCEPT, got ACCEPT
+PASS  treasury {TREASURY} tries to pay a merchant (PAY)                expect REJECT, got REJECT @ CapSubset L44
+PASS  tamper own_c1x + 1                                               expect REJECT, got REJECT @ AccHybridCompressed L18
+PASS  tamper own_c2x + 1                                               expect REJECT, got REJECT @ AccHybridCompressed L18
+PASS  tamper own_esign + 1                                             expect REJECT, got REJECT @ AccHybridCompressed L28
+PASS  tamper own_e[0] + 1                                              expect REJECT, got REJECT @ AccHybridCompressed L23
+PASS  tamper own_e[1] + 1                                              expect REJECT, got REJECT @ AccHybridCompressed L23
+PASS  tamper own_e[2] + 1                                              expect REJECT, got REJECT @ AccHybridCompressed L23
+PASS  agent encrypts the chain to another key (own_w = owner's)        expect REJECT, got REJECT @ AccHybridCompressed L18
+PASS  agent encrypts to another key and swaps own_w to match           expect REJECT, got REJECT @ ForceEqualIfEnabled L56
+PASS  own_w off the curve                                              expect REJECT, got REJECT @ BabyCheck L82
+PASS  view key w = identity (0, 1) -> vpk = identity                   expect REJECT, got REJECT @ OwnerViewKey L15
+PASS  view key w = order-2 point (0, -1) -> vpk = identity             expect REJECT, got REJECT @ OwnerViewKey L15
+PASS  own_w = -w (on curve, different vpk)                             expect REJECT, got REJECT @ ForceEqualIfEnabled L56
+PASS  own_w of another valid key (cert0 hash mismatch)                 expect REJECT, got REJECT @ ForceEqualIfEnabled L56
+PASS  legacy Poseidon(7) root certificate                              expect REJECT, got REJECT @ ForceEqualIfEnabled L56
+PASS  registration: own_w of another key (leaf0 mismatch)              expect REJECT, got REJECT @ ShadowRegister L51
+PASS  registration: leaf0 + 1                                          expect REJECT, got REJECT @ ShadowRegister L51
+PASS  procurement certificate revoked (stale witness, new root)        expect REJECT, got REJECT @ IMTPath L39
+PASS  no fresh non-membership witness exists for a revoked certificate expect REJECT, got REJECT
+
+26 / 26 as expected

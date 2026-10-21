@@ -1,0 +1,6 @@
+main_d1 # of Constraints: 60801
+main_d1 # of Public Inputs: 15
+main_d2 # of Constraints: 105606
+main_d2 # of Public Inputs: 16
+main_reg # of Constraints: 17608
+main_reg # of Public Inputs: 4
