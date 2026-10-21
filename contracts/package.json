@@ -1,0 +1,12 @@
+{
+  "name": "@shadowpass/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Foundry contracts; fixtures are generated from @shadowpass/circuits (issues #3-#5)",
+  "scripts": {
+    "test": "forge test",
+    "fixtures": "node script/gen-fixtures.mjs"
+  },
+  "devDependencies": { "@shadowpass/circuits": "*" }
+}

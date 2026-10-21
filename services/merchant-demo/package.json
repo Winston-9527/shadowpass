@@ -1,0 +1,17 @@
+{
+  "name": "@shadowpass/merchant-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Demo merchant behind stock x402 middleware (issue #8)",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@shadowpass/x402": "*"
+  }
+}

@@ -1,0 +1,19 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - uses: foundry-rs/foundry-toolchain@v1
+      # circuits need circom and build/ artifacts; they are tested locally (docs/ARCHITECTURE.md §6). contracts' test script runs forge.
+      - run: npm test -w packages -w services -w apps -w contracts --if-present

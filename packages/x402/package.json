@@ -1,0 +1,17 @@
+{
+  "name": "@shadowpass/x402",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "x402 'shadowpass' scheme: client, server and facilitator classes (issue #8)",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@shadowpass/sdk": "*"
+  }
+}

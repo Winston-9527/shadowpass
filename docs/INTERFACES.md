@@ -12,6 +12,8 @@
 | 标签 | `KEY_TAG = 2053861995`（"zkrk"），`TAG_BNF = 2053857902`（"zkbn"），`TAG_REG = 2053858418`（"zkdr"） |
 | 树深度 | 签发树 `MD = 16`，撤销 IMT `RD = 20`，根凭证树 `RT = 20`，票据树 `NT = 20`，群组树 20 |
 | 网络 | Base Sepolia，chain id `84532`，CAIP-2 `eip155:84532` |
+| 钱包域名 / passkey RP ID | `shadowpass-wallet.vercel.app`（开发用 `localhost`），定了不改 |
+| 证明产物 | `https://shadowpass-wallet.vercel.app/zk/circuits-v<N>/`，按 MANIFEST 校验（见 `docs/ARCHITECTURE.md` §4） |
 
 ## 2. 哈希与凭证
 
