@@ -24,7 +24,7 @@ ShadowPass 保留同样的四方结构（用户、Agent、钱包商、商家）�
 
 ```
 Alice（7 天，100 USDC）
- └─ 管家 Agent    {PAY, TREASURY}   分配预算，不上网
+ └─ 管家（Alice 钱包里的分配钥） {PAY, TREASURY}   分配预算、签发和吊销 Agent
      ├─ 采购 Agent {PAY}             通过 x402 买报告、订阅新闻
      └─ 理财 Agent {TREASURY}        把闲置预算存入白名单金库，只能回到预先承诺的票据
 ```

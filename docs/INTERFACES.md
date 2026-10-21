@@ -36,7 +36,10 @@ recovery  = AES-256-GCM(key = scrypt(恢复码), seed)
 sign_prv  = HKDF-SHA256(seed, info="shadowpass/sign", 32 字节)   -> identity(sign_prv)（world.mjs 的推导）
 vsk       = HKDF-SHA256(seed, info="shadowpass/view", 64 字节) mod L，为 0 时换 info 后缀重试
 box_sk    = HKDF-SHA256(seed, info="shadowpass/box", 32 字节)    -> X25519 信箱私钥
+steward_prv = HKDF-SHA256(seed, info="shadowpass/steward", 32 字节) -> identity(steward_prv)，管家分配钥（ent1）
 ```
+
+委托树固定为：`ent0 = Alice 身份` →（cert0，Poseidon9）→ `ent1 = 管家分配钥`（也在 Alice 钱包里）→（cert1）→ `ent2 = Agent`。Agent 的证明是 D=2；Agent 再向下委托是 D=3（需要时再编译 `main_d3`）。入金直接铸给管家：`owner = ent1, lin = [cert0, 0, 0, 0]`。
 
 Agent 侧（MCP server）自己生成 `holder_prv`（32 字节）和 X25519 信箱密钥，存在本机，永不离开。
 
