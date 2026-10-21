@@ -62,14 +62,15 @@ D=1 共 15 个，D=2 共 16 个。主人密文 `ct = [own_c1x, own_c1y, own_c2x,
 
 ```solidity
 struct Action { address target; bytes4 method; uint256 amount; uint256 nonce; bytes params; }
-ctx_hash = uint256(keccak256(abi.encode(block.chainid, address(gate), act.method, act.target, act.params, act.amount, act.nonce))) >> 8;
+ctx_hash = uint256(keccak256(abi.encode(block.chainid, address(gate), act.method, act.target, act.params, act.amount, act.nonce, keccak256(memoChange)))) >> 8;
 ```
 
+- 电路把 `ctx_hash` 当作不透明的公开输入，所以在哈希里加入 `keccak256(memoChange)` 不需要改电路，却能防止转发方（facilitator）替换找零票据的备忘。
 - `amount` 必须等于 `q_spent`。`requiredCap[method]` 由 Gate 管理员通过 `setMethod` 配置，作为 `act_req_cap` 公开输入。
 - 方法：`PAY = bytes4(keccak256("shadowpass.PAY"))` 要求能力 `PAY`；`TREASURY_SUPPLY = bytes4(keccak256("shadowpass.TREASURY_SUPPLY"))` 要求能力 `TREASURY`。
 - 付款：`target = ShadowPayout`，`params = abi.encode(payTo, reqHash)`，`reqHash = keccak256(abi.encode(network, asset, amount, payTo, resourceUrl))`。
-- 理财存入（定期存款语义）：`method = TREASURY_SUPPLY`，`target = TreasuryAdapter`，`params = abi.encode(vault, term, returnCm, expectedQ)`。到期后任何人可调用 `TreasuryAdapter.withdraw(positionId)`，赎回并以 `returnCm`（面额 `expectedQ`，由理财 Agent 在存入时承诺）存回资金池；多出的部分进储备，不足时报 `Shortfall` 并不铸票据。
-- 资金流（推送模型）：Gate 在验证通过后先把 `amount` 个代币转给 `target`，再调用 `target.onAuthorized(method, amount, params)`。资金回流只走 `Gate.depositFromAdapter(cm, q)`，只允许白名单 adapter 调用，代币先转入 Gate。
+- 理财存入（定期存款语义）：`method = TREASURY_SUPPLY`，`target = TreasuryAdapter`，`params = abi.encode(vault, term, returnCm, expectedQ, returnMemo)`。到期后任何人可调用 `TreasuryAdapter.withdraw(positionId)`，赎回并以 `returnCm`（面额 `expectedQ`，由理财 Agent 在存入时承诺）存回资金池，同时发出 `returnMemo`；多出的部分进储备，不足时报 `Shortfall` 并不铸票据。
+- 资金流（推送模型）：Gate 在验证通过后先把 `amount` 个代币转给 `target`，再调用 `target.onAuthorized(method, amount, params)`。资金回流只走 `Gate.depositFromAdapter(cm, q, memo)`，只允许白名单 adapter 调用，代币先转入 Gate。
 
 ## 6. 链上事件（前端和 MCP 靠它们重建状态）
 
@@ -78,6 +79,7 @@ ctx_hash = uint256(keccak256(abi.encode(block.chainid, address(gate), act.method
 | Gate | `Executed(budgetNf, target, method, amount)` | 付款记录 |
 | Gate | `OwnerCiphertext(budgetNf, uint256[] ct)` | 主人扫描解密（取代 v9 的 `Accountability`） |
 | Gate | `NoteInserted(cm, index, newRoot)` | 重建票据树 |
+| Gate | `NoteMemo(uint256 indexed cm, bytes memo)` | 每张新票据的加密打开信息，用于恢复（§11） |
 | Gate / 签发树 | `Issued(certHash, index, newRoot)` | 重建签发树 |
 | Registry | `Registered(nf, leaf0, root)` / `Replaced(...)` | 重建根凭证树 |
 | Revocations | `Revoked(entry, index, oldRoot, newRoot)` | 重建撤销 IMT |
@@ -118,7 +120,7 @@ Agent 用 `delegate` 创建子 Agent 时，向主人信箱发送 `{"type": "dele
 ```json
 { "D": 2, "proof": {"a": [], "b": [[], []], "c": []}, "roots": {"issued": "..", "revoked": "..", "root": ".."},
   "nowTs": "..", "action": {"target": "0x..", "method": "0x..", "amount": "..", "nonce": "..", "params": "0x.."},
-  "ct": ["..."], "budget": {"noteRoot": "..", "budgetNf": "..", "cmChange": "..", "qSpent": ".."} }
+  "ct": ["..."], "budget": {"noteRoot": "..", "budgetNf": "..", "cmChange": "..", "qSpent": ".."}, "memoChange": "0x.." }
 ```
 - 流程：`upfront`（先 settle 再交付）。facilitator `/verify` 检查 `payTo`、`amount`、`reqHash`，然后 `eth_call` 模拟 `Gate.execute`；`/settle` 发送交易。参考：`spikes/x402-scheme/`。
 
@@ -138,3 +140,34 @@ GET  /box/:recipient?after=n                                          -> [{ "id"
   "treasury": "0x..", "vault": "0x..", "token": "0x..", "verifiers": {"d1": "0x..", "d2": "0x..", "reg": "0x..", "revoke": "0x..", "transfer": "0x..", "mint": "0x.."},
   "startBlock": 0, "facilitator": "https://..", "mailbox": "https://.." }
 ```
+
+## 11. 票据备忘与恢复
+
+票据的 `rho` 一律用 CSPRNG 生成，**不从种子派生**（派生法恢复不了私有金额，且序号重复会冻结资金）。每张新票据在同一笔交易里附一段加密备忘，合约原样写进 `NoteMemo` 事件，不做验证。
+
+| 函数 | 备忘参数 | 收件人 |
+|---|---|---|
+| `Gate.deposit(proof, cm, q, memo)` | `memo` | 主人信箱公钥（票据归管家） |
+| `Gate.transferBudget(..., memo1, memo2)` | 每个输出一段 | 归管家的那张 → 主人；分给 Agent 的那张 → 该 Agent 的信箱公钥 |
+| `Gate.execute(..., memoChange)` | 找零票据 | 花钱的 Agent 自己（主人钱包付款时 → 主人）；已绑定进 `ctx_hash` |
+| `Gate.depositFromAdapter(cm, q, memo)` | 存入时承诺的 `returnMemo` | 理财 Agent 自己 |
+| `ShadowToken.faucetDeposit(proof, cm, q, memo)` | `memo` | 主人 |
+
+格式：
+```
+plaintext = 0x01 || own.x(32) || own.y(32) || q(8, big-endian) || lin0..lin3(4 x 32) || rho(32)    // 233 字节
+memo      = crypto_box_seal(plaintext, recipientBoxPk)                                            // libsodium 匿名密封盒，281 字节
+```
+
+恢复：扫描 `NoteMemo`，用信箱私钥逐条尝试解密；解开后**用明文重算 `cm`，必须等于事件里的 `cm`**（防止无效备忘）；再用持有人私钥算出 nullifier，检查是否已花。未花的就是自己的票据。
+
+已知限制：`deposit`、`transferBudget` 的备忘不在证明里，转发方可以把它换成垃圾数据，这会导致这张票据无法从链上恢复，但钱不会丢。所以钱包和 MCP 在本地也保存票据，并在交易确认后检查事件里的备忘是否和自己发出的一致。
+
+## 12. 入金
+
+| 方式 | 流程 | gas |
+|---|---|---|
+| 从外部钱包充值（真实流程） | 钱包页面经 EIP-1193（MetaMask 等）连接外部地址 → 本地生成 `budget_mint` 证明和 `cm` → 外部钱包发出 `approve` 和 `Gate.deposit` | 外部地址支付 |
+| 测试网一键领取（演示） | `ShadowToken.faucetDeposit`：代币合约给自己铸币、授权 Gate、代为调用 `deposit`；每地址每天限额 | facilitator 代付 |
+
+入金是公开的（谁、何时、多少）。钱包只提供固定面额（10 / 50 / 100），并提示入金后隔一段时间再分给 Agent，以减少关联。分给 Agent 的 `transferBudget` 是私密的。入金得到的票据：`owner = 管家（ent1）`，`lin = [cert0, 0, 0, 0]`。
