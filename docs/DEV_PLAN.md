@@ -14,6 +14,7 @@
 | 工单拆分（#2–#13，总览 #14）、README、`docs/INTERFACES.md`、`AGENTS.md` | ✅ |
 | 域名（passkey RP ID） | ✅ `shadowpass-wallet.vercel.app` |
 | monorepo 骨架、`docs/ARCHITECTURE.md`、CI | ✅ |
+| 演示形态：不做原生 App；Mac 浏览器 + Touch ID；Web Push 选做 | ✅ 2026-10-21 |
 | Aave 在 Base Sepolia 是否可用 | ⏳ 待确认，否则用模拟 ERC-4626 金库 |
 
 ## 排期
@@ -22,8 +23,8 @@
 |---|---|---|---|
 | 0–4h | ✅ 新仓库、基线 | ✅ x402 spike；抽出 `prover.ts` | PWA 骨架、域名和 RP ID、passkey |
 | 4–12h | ✅ 电路：主人密文、根凭证绑定查看公钥；编译、setup、实测约束 | MCP server 骨架：`wallet_status`、`pay`；witness | 种子包裹、两把钥派生、circomlibjs 签名 |
-| 12–24h | 合约：`deposit`、签发树开放、Registry 开放、`ShadowPayout`、`TreasuryAdapter` + 模拟金库；部署脚本 | facilitator `/verify` `/settle`；**里程碑：Claude 里一句话经真实 x402 中间件完成链上付款** | 扫码发卡、信箱下发凭证 |
-| 24–36h | 负例：篡改主人密文、加密给他人；吊销流程 | `delegate`、理财工具、收据推送、恶意模式 | 账单扫描与解密、授权树视图、异常规则、Web Push |
+| 12–24h | 合约：`deposit`、签发树开放、Registry 开放、`ShadowPayout`、`TreasuryAdapter` + 模拟金库；部署脚本 | facilitator `/verify` `/settle`；**里程碑：Claude 里一句话经真实 x402 中间件完成链上付款** | 配对链接发卡、信箱下发凭证 |
+| 24–36h | 负例：篡改主人密文、加密给他人；吊销流程 | `delegate`、理财工具、收据推送、恶意模式 | 账单扫描与解密、授权树视图、异常规则、页面内提醒（Web Push 选做） |
 | 36–44h | 部署 Base Sepolia、Anvil 兜底 | 录备用视频 | 对照面板、理财仓位展示、文案 |
 | 44–48h | 一起排练三遍 | | |
 

@@ -11,7 +11,7 @@ import { IMT } from "./imt.mjs";
 
 export const P = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 export const L = 2736030358979909402780800718157159386076813972158567259200215660948447373041n;   // BabyJub prime subgroup order
-export const MD = 16, RD = 20, RT = 20, NT = 20;
+export const MD = 20, RD = 20, RT = 20, NT = 20;
 export const KEY_TAG = 2053861995n, TAG_BNF = 2053857902n, TAG_REG = 2053858418n;
 const mod = (x) => ((x % P) + P) % P;
 const S = (x) => (Array.isArray(x) ? x.map(S) : typeof x === "bigint" || typeof x === "number" ? x.toString()
@@ -50,18 +50,6 @@ export const noteCm = (n) => poseidon8([n.own[0], n.own[1], BigInt(n.q), ...n.li
 export const stateRoot = (i, r, t) => poseidon3([BigInt(i), BigInt(r), BigInt(t)]);
 export function sign(ent, msg) { const s = eddsa.signPoseidon(ent.prv, F.e(BigInt(msg))); return { S: s.S, R8x: F.toObject(s.R8[0]), R8y: F.toObject(s.R8[1]) }; }
 
-// Sparse Poseidon Merkle tree of fixed depth (issued certificates), leaves appended at 0, 1, 2, ...
-class SparseTree {
-  constructor(depth) { this.depth = depth; this.zero = [0n]; for (let l = 0; l < depth; l++) this.zero.push(poseidon2([this.zero[l], this.zero[l]])); this.levels = Array.from({ length: depth + 1 }, () => new Map()); this.n = 0; this.index = new Map(); }
-  insert(leaf) {
-    const i = this.n++; this.index.set(BigInt(leaf), i); let idx = BigInt(i); this.levels[0].set(idx, BigInt(leaf));
-    for (let l = 0; l < this.depth; l++) { const a = this.levels[l].get(idx & ~1n) ?? this.zero[l], b = this.levels[l].get(idx | 1n) ?? this.zero[l]; idx >>= 1n; this.levels[l + 1].set(idx, poseidon2([a, b])); }
-    return i;
-  }
-  get root() { return this.levels[this.depth].get(0n) ?? this.zero[this.depth]; }
-  path(leaf) { const i = this.index.get(BigInt(leaf)); if (i === undefined) throw new Error("not issued"); let idx = BigInt(i); const sib = [], bit = [];
-    for (let l = 0; l < this.depth; l++) { sib.push(this.levels[l].get(idx ^ 1n) ?? this.zero[l]); bit.push(Number(idx & 1n)); idx >>= 1n; } return { sib, bit }; }
-}
 const leanProof = (tree, leaf, depth) => { const idx = tree.indexOf(BigInt(leaf)); if (idx < 0) throw new Error("leaf not in tree"); const p = tree.generateProof(idx);
   const sib = p.siblings.map(BigInt); while (sib.length < depth) sib.push(0n); return { root: p.root, depth: p.siblings.length, index: p.index, sib }; };
 
@@ -90,7 +78,7 @@ export function openChain(ct, vsk) {
 export class ShadowWorld {
   constructor(seed) {
     this.rnd = rng(seed);
-    this.issued = new SparseTree(MD); this.roots = new LeanIMT((a, b) => poseidon2([a, b])); this.notes = new LeanIMT((a, b) => poseidon2([a, b]));
+    this.issued = new LeanIMT((a, b) => poseidon2([a, b])); this.roots = new LeanIMT((a, b) => poseidon2([a, b])); this.notes = new LeanIMT((a, b) => poseidon2([a, b]));
     this.group = new LeanIMT((a, b) => poseidon2([a, b]));
   }
   static async create(seed) { const w = new ShadowWorld(seed); w.revoked = await IMT.create(RD); return w; }
@@ -104,9 +92,11 @@ export class ShadowWorld {
     return { hop: 0, issuer: human, holder, cap: BigInt(cap), expiry: BigInt(expiry), vk, hash, sig: sign(human, hash) };
   }
   // Hop i >= 1: appended to the issued tree.
-  issue(parent, holder, cap, expiry) {
+  issue(parent, holder, cap, expiry, { insert = true } = {}) {
     const i = parent.hop + 1, issuer = parent.holder; const hash = certHash(i, issuer, holder, cap, expiry);
-    const c = { hop: i, issuer, holder, cap: BigInt(cap), expiry: BigInt(expiry), hash, sig: sign(issuer, hash) }; this.issued.insert(hash); return c;
+    const c = { hop: i, issuer, holder, cap: BigInt(cap), expiry: BigInt(expiry), hash, sig: sign(issuer, hash) };
+    if (insert) this.issued.insert(hash);
+    return c;
   }
   register(cert0) { this.roots.insert(cert0.hash); }
   revokeCert(c) { this.revoked.insert(c.hash); }
@@ -121,6 +111,7 @@ export class ShadowWorld {
     const D = chain.length, ents = [chain[0].issuer, ...chain.map((c) => c.holder)];
     const vpk = encryptTo ?? chain[0].vk.vpk, ct = encryptChain(ents, vpk, this.rnd);
     const rootP = leanProof(this.roots, chain[0].hash, RT), noteP = leanProof(this.notes, noteCm(note), NT);
+    const issuedP = chain.map((c) => (c.hop === 0 ? null : leanProof(this.issued, c.hash, MD)));
     const rw = chain.map((c) => this.revoked.nonMemberWitness(c.hash));
     const kw = D > 1 ? ents.slice(2).map((e) => this.revoked.nonMemberWitness(keyEntry(e))) : null;
     const zerosRD = Array(RD).fill(0n);
@@ -132,8 +123,9 @@ export class ShadowWorld {
       ent_Ax: ents.map((e) => e.Ax), ent_Ay: ents.map((e) => e.Ay),
       sig_S: chain.map((c) => c.sig.S), sig_R8x: chain.map((c) => c.sig.R8x), sig_R8y: chain.map((c) => c.sig.R8y),
       cap: chain.map((c) => c.cap), expiry: chain.map((c) => c.expiry),
-      m_sib: chain.map((c) => (c.hop === 0 ? Array(MD).fill(0n) : this.issued.path(c.hash).sib)),
-      m_bit: chain.map((c) => (c.hop === 0 ? Array(MD).fill(0) : this.issued.path(c.hash).bit)),
+      m_depth: issuedP.map((p) => (p === null ? 0 : p.depth)),
+      m_index: issuedP.map((p) => (p === null ? 0 : p.index)),
+      m_sib: issuedP.map((p) => (p === null ? Array(MD).fill(0n) : p.sib)),
       r_low_value: rw.map((w) => w.low_value), r_low_next_index: rw.map((w) => w.low_next_index), r_low_next_value: rw.map((w) => w.low_next_value),
       r_sib: rw.map((w) => w.sib), r_bit: rw.map((w) => w.bit),
       rt_depth: rootP.depth, rt_index: rootP.index, rt_sib: rootP.sib,
@@ -147,6 +139,80 @@ export class ShadowWorld {
       nt_depth: noteP.depth, nt_index: noteP.index, nt_sib: noteP.sib,
     };
     return { input: S(input), change, ct };
+  }
+
+  // Input of main_revoke.circom. `writer` is the issuer when who = 0 and the holder when who = 1.
+  revokeCertInput(cert, writer, who = 0, ownW) {
+    return this.revokeInput({
+      entry: cert.hash,
+      kind: 1,
+      who,
+      hop: cert.hop,
+      ia: [cert.issuer.Ax, cert.issuer.Ay],
+      ha: [cert.holder.Ax, cert.holder.Ay],
+      cap: cert.cap,
+      expiry: cert.expiry,
+      sk: writer.sk,
+      ownW: ownW ?? (cert.hop === 0 ? cert.vk.w : [0n, 1n]),
+    });
+  }
+
+  revokeKeyInput(holder, writer = holder) {
+    return this.revokeInput({ entry: keyEntry(holder), kind: 0, who: 0, ia: [holder.Ax, holder.Ay], sk: writer.sk });
+  }
+
+  // Generic main_revoke.circom witness. Returns the resulting root without mutating this world.
+  revokeInput({ entry, kind = 1, who = 0, hop = 0, ia, ha = [0n, 0n], cap = 0n, expiry = 0n, sk, ownW = [0n, 1n] }) {
+    const k = BigInt(entry) & ((1n << 252n) - 1n);
+    if (this.revoked.has(k)) throw new Error("entry already revoked");
+    const lowIndex = this.revoked.lowIndex(k);
+    const low = this.revoked.leaves[lowIndex];
+    const lowPath = this.revoked.path(lowIndex);
+    const afterLow = this.revoked.clone();
+    const nextIndex = afterLow.leaves.length;
+    afterLow._set(lowIndex, { value: low.value, nextIndex: BigInt(nextIndex), nextValue: k });
+    const newPath = afterLow.path(nextIndex);
+    afterLow._set(nextIndex, { value: k, nextIndex: low.nextIndex, nextValue: low.nextValue });
+    const input = {
+      old_root: this.revoked.root, new_root: afterLow.root, entry: BigInt(entry), next_index: BigInt(nextIndex),
+      kind: BigInt(kind), who: BigInt(who), hop: BigInt(hop), ia: ia.map(BigInt), ha: ha.map(BigInt),
+      cap: BigInt(cap), expiry: BigInt(expiry), own_w: ownW.map(BigInt), sk: BigInt(sk),
+      low_value: low.value, low_next_index: low.nextIndex, low_next_value: low.nextValue,
+      low_sib: lowPath.sib, low_bit: lowPath.bit, new_sib: newPath.sib,
+    };
+    return { input: S(input), newRoot: afterLow.root, after: afterLow, nextIndex: BigInt(nextIndex) };
+  }
+
+  mintInput(note) {
+    return S({ cm: noteCm(note), q: BigInt(note.q), own: note.own, lin: note.lin, rho: BigInt(note.rho) });
+  }
+
+  // Input of budget_transfer.circom. `child` is the Poseidon7 hop>=1 certificate for delegation mode.
+  transferInput({ holder, holderSk, note, child, q1, q2 }) {
+    const delegate = child ? 1n : 0n;
+    const firstFree = note.lin.findIndex((x) => BigInt(x) === 0n);
+    if (child && child.hop !== firstFree) throw new Error("child certificate must occupy the first free lineage slot");
+    const outputHolder = child ? child.holder : holder;
+    const out1 = { own: [outputHolder.Ax, outputHolder.Ay], q: BigInt(q1), lin: [...note.lin], rho: this.rand250() };
+    const out2 = { own: [...note.own], q: BigInt(q2), lin: [...note.lin], rho: this.rand250() };
+    if (child) out1.lin[firstFree] = child.hash;
+    const zero = { low_value: 0n, low_next_index: 0n, low_next_value: 0n, sib: Array(RD).fill(0n), bit: Array(RD).fill(0) };
+    const lineage = note.lin.map((e) => (BigInt(e) === 0n ? zero : this.revoked.nonMemberWitness(e)));
+    const ownerKey = this.revoked.nonMemberWitness(keyEntry(holder));
+    const noteP = leanProof(this.notes, noteCm(note), NT);
+    const input = {
+      note_root: noteP.root, revoked_root: this.revoked.root, nullifier: poseidon3([TAG_BNF, BigInt(holderSk), noteCm(note)]),
+      cm_out1: noteCm(out1), cm_out2: noteCm(out2),
+      own: note.own.map(BigInt), q_in: BigInt(note.q), lin: note.lin.map(BigInt), rho_in: BigInt(note.rho), sk: BigInt(holderSk),
+      nt_depth: noteP.depth, nt_index: noteP.index, nt_sib: noteP.sib,
+      r_low_value: lineage.map((x) => x.low_value), r_low_next_index: lineage.map((x) => x.low_next_index),
+      r_low_next_value: lineage.map((x) => x.low_next_value), r_sib: lineage.map((x) => x.sib), r_bit: lineage.map((x) => x.bit),
+      k_low_value: ownerKey.low_value, k_low_next_index: ownerKey.low_next_index, k_low_next_value: ownerKey.low_next_value,
+      k_sib: ownerKey.sib, k_bit: ownerKey.bit,
+      o1: out1.own.map(BigInt), q1: BigInt(q1), rho1: BigInt(out1.rho), delegate,
+      q2: BigInt(q2), rho2: BigInt(out2.rho), cap: child ? child.cap : 0n, expiry: child ? child.expiry : 0n,
+    };
+    return { input: S(input), out1, out2 };
   }
 
   // Input of main_reg.circom: the human proves group membership and the root certificate hash (with view key).

@@ -35,6 +35,13 @@ export class IMT {
     return true;
   }
   path(i) { let idx = BigInt(i); const sib = [], bit = []; for (let l = 0; l < this.depth; l++) { sib.push(this.levels[l].get(idx ^ 1n) ?? this.zero[l]); bit.push(Number(idx & 1n)); idx >>= 1n; } return { sib, bit }; }
+  clone() {
+    const c = Object.create(Object.getPrototypeOf(this));
+    Object.assign(c, this);
+    c.leaves = this.leaves.map((leaf) => ({ ...leaf }));
+    c.levels = this.levels.map((level) => new Map(level));
+    return c;
+  }
   nonMemberWitness(keyFull) {
     const k = trunc(keyFull); if (this.has(k)) throw new Error("key is a member: no non-membership witness");
     const lo = this.lowIndex(k), low = this.leaves[lo], { sib, bit } = this.path(lo);
