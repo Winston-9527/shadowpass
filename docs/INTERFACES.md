@@ -66,7 +66,8 @@ ctx_hash = uint256(keccak256(abi.encode(block.chainid, address(gate), act.method
 - `amount` 必须等于 `q_spent`。`requiredCap[method]` 由 Gate 管理员通过 `setMethod` 配置，作为 `act_req_cap` 公开输入。
 - 方法：`PAY = bytes4(keccak256("shadowpass.PAY"))` 要求能力 `PAY`；`TREASURY_SUPPLY = bytes4(keccak256("shadowpass.TREASURY_SUPPLY"))` 要求能力 `TREASURY`。
 - 付款：`target = ShadowPayout`，`params = abi.encode(payTo, reqHash)`，`reqHash = keccak256(abi.encode(network, asset, amount, payTo, resourceUrl))`。
-- 理财存入：`target = TreasuryAdapter`，`params = abi.encode(vault, returnCm)`。
+- 理财存入（定期存款语义）：`method = TREASURY_SUPPLY`，`target = TreasuryAdapter`，`params = abi.encode(vault, term, returnCm, expectedQ)`。到期后任何人可调用 `TreasuryAdapter.withdraw(positionId)`，赎回并以 `returnCm`（面额 `expectedQ`，由理财 Agent 在存入时承诺）存回资金池；多出的部分进储备，不足时报 `Shortfall` 并不铸票据。
+- 资金流（推送模型）：Gate 在验证通过后先把 `amount` 个代币转给 `target`，再调用 `target.onAuthorized(method, amount, params)`。资金回流只走 `Gate.depositFromAdapter(cm, q)`，只允许白名单 adapter 调用，代币先转入 Gate。
 
 ## 6. 链上事件（前端和 MCP 靠它们重建状态）
 
