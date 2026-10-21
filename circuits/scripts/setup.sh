@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Groth16 setup on the Hermez ptau 2^18 with ONE local phase-2 contribution (demo only, NOT a trusted setup).
 set -euo pipefail; cd "$(dirname "$0")/.."
-PTAU=../artifacts/ptau/powersOfTau28_hez_final_18.ptau; SJ=node_modules/.bin/snarkjs; mkdir -p build/zk zk
+PTAU=../artifacts/ptau/powersOfTau28_hez_final_18.ptau; SJ=../node_modules/.bin/snarkjs; mkdir -p build/zk zk
 for c in ${CIRCUITS:-main_d1 main_d2 main_reg}; do
   s=$(date +%s); log=build/zk/setup_$c.log
   $SJ groth16 setup build/$c/$c.r1cs $PTAU build/zk/${c}_0.zkey > $log 2>&1

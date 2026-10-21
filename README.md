@@ -63,11 +63,14 @@ flowchart LR
 |---|---|---|
 | `circuits/` | ShadowPass 电路（v9.2 + 主人查看钥 + 主人密文）、witness 生成器、测试、setup | ✅ |
 | `contracts/` | Foundry：verifier、Gate、Registry、Payout、TreasuryAdapter | 🚧 |
-| `packages/sdk/` | 链上状态同步、witness、证明、凭证包（MCP / PWA / facilitator 共用） | ⏳ |
+| `packages/sdk/` | 链上状态同步、witness、证明、凭证包、信箱客户端（唯一实现，各方共用） | ⏳ |
+| `packages/x402/` | `shadowpass` scheme 的 client / server / facilitator 类 | ⏳ |
 | `packages/mcp/` | Agent 端 MCP server | ⏳ |
-| `services/facilitator/` | x402 `shadowpass` scheme 的 facilitator 和示例商家 | ⏳ |
+| `services/facilitator/` | x402 facilitator + 钱包交易代付 | ⏳ |
+| `services/merchant-demo/` | 示例商家（官方 x402 中间件） | ⏳ |
 | `services/mailbox/` | 加密信箱 | ⏳ |
-| `apps/wallet/` | 用户钱包 PWA | ⏳ |
+| `apps/wallet/` | 用户钱包 PWA，部署到 shadowpass-wallet.vercel.app | ⏳ |
+| `deployments/` | 各网络合约地址 | ⏳ |
 | `spikes/` | 一次性实验及结论 | ✅ x402 自定义 scheme |
 | `vendor/zk-hada-exp/` | 研究仓库的只读副本（来源见 `docs/PROVENANCE.md`） | 只读 |
 | `docs/` | 产品方案、开发计划、接口规范、基线 | |
@@ -76,6 +79,7 @@ flowchart LR
 
 - [产品方案](docs/PRODUCT.md)（含风险与边界）
 - [开发计划与状态](docs/DEV_PLAN.md)
+- [代码架构](docs/ARCHITECTURE.md)：monorepo 结构、依赖方向、SDK API、产物分发、CI
 - [共享接口规范](docs/INTERFACES.md)：所有工单共同的约定
 - [开发 Agent 工作约定](AGENTS.md)
 - 工作拆分：见 Issues，总览在 tracking issue

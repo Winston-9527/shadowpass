@@ -1,0 +1,15 @@
+{
+  "name": "@shadowpass/mailbox",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Encrypted mailbox service (issue #9)",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {}
+}

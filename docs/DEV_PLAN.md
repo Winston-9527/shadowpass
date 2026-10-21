@@ -12,7 +12,8 @@
 | x402 自定义 scheme spike（第 4 小时检查点） | ✅ 通过，`568452b`，不启用回退 |
 | A1 电路：主人密文 + 根凭证绑定查看公钥 | ✅ 26/26 负例、D2 105,606 约束、证明 1.57 s、verifier 291,606 gas，见 `circuits/README.md` |
 | 工单拆分（#2–#13，总览 #14）、README、`docs/INTERFACES.md`、`AGENTS.md` | ✅ |
-| 域名（passkey RP ID） | ⏳ 待定（可用 `<项目名>.vercel.app`） |
+| 域名（passkey RP ID） | ✅ `shadowpass-wallet.vercel.app` |
+| monorepo 骨架、`docs/ARCHITECTURE.md`、CI | ✅ |
 | Aave 在 Base Sepolia 是否可用 | ⏳ 待确认，否则用模拟 ERC-4626 金库 |
 
 ## 排期

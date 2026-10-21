@@ -14,5 +14,10 @@
     "circomlibjs": "0.1.7",
     "poseidon-lite": "0.3.0",
     "snarkjs": "0.7.6"
+  },
+  "version": "0.0.0",
+  "exports": {
+    "./world": "./scripts/world.mjs",
+    "./zk/*": "./zk/*"
   }
 }
