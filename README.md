@@ -9,7 +9,8 @@ Product plan: https://claude.ai/artifact/9z7TQfc9Bh5v1NnbUbxxy6
 | Path | What |
 |---|---|
 | `vendor/zk-hada-exp/` | Read-only copy of the research circuits, scripts and Foundry contracts (see `docs/PROVENANCE.md`). Do not edit; changes go in our own packages. |
-| `docs/` | Provenance, baselines, decisions. |
+| `docs/` | `PRODUCT.md` (product plan), `DEV_PLAN.md` (schedule and status), `product-plan.html`, provenance, baselines. |
+| `spikes/` | Throwaway experiments with recorded results. |
 
 Packages for the hackathon (circuits fork, contracts, MCP server, facilitator, PWA) are added as they are built.
 
