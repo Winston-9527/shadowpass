@@ -4,6 +4,7 @@
 - Copied 2026-10-21 into `vendor/zk-hada-exp/work/` with the original layout (relative imports between `zkdac_v2` … `zkdac_v9_2` depend on it):
   - `t2_circuit_fix/zkdac_v2 … zkdac_v9_2`: circuits, scripts, package files, manifests (no `node_modules`, `build`, `results`).
   - `t4_contracts/foundry` (src, test, fixtures) and `t4_contracts/package*.json`.
+  - `t4_obligations/E7-obligations_20261009/revoke` (revocation transition circuit, scripts, vk; commit 744dddd), added 2026-10-21.
 - `node_modules`: `npm ci` from the copied lockfiles in `zkdac_v2 … zkdac_v7` and `t4_contracts`; `zkdac_v8 … v9_2` symlink to `../zkdac_v7/node_modules`, as in the research repo.
 - Build artifacts (git-ignored) copied from the research repo: `zkdac_v9_2/build`, `zkdac_v8/build`.
 
