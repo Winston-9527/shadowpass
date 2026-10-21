@@ -5,8 +5,9 @@ pragma circom 2.1.6;
 //      vpk = 8 * own_w for an on-curve witness own_w, so vpk is in the prime-order subgroup, and vpk != identity.
 //  (2) OWNER CIPHERTEXT. The chain keys ent[0..D] are encrypted to vpk (AccHybridCompressed, unchanged from v9.1), replacing the v9
 //      ciphertext to the global auditor key TPK, which is removed together with its public inputs. Only the owner can open the chain.
-// Everything else (EdDSA chain, issued tree, registered-root tree, IMT revocation of certificates and keys, cap subset, expiry attenuation,
-// holder_sk range and non-zero, budget note, state root) is copied unchanged.
+// Everything else (EdDSA chain, registered-root tree, IMT revocation of certificates and keys, cap subset, expiry attenuation,
+// holder_sk range and non-zero, budget note, state root) is copied unchanged. Hops >= 1 use the same dynamic-depth LeanIMT
+// membership as the registered-root tree; their maximum depth is MD = 20.
 include "circomlib/circuits/poseidon.circom";
 include "circomlib/circuits/eddsaposeidon.circom";
 include "circomlib/circuits/babyjub.circom";
@@ -16,26 +17,6 @@ include "imt.circom";
 include "binary-merkle-root.circom";
 include "accountability_v9.circom";
 include "owner_key.circom";
-
-template MerkleMember(MD) {
-    signal input leaf;
-    signal input sib[MD];
-    signal input bit[MD];
-    signal input root;
-    signal cur[MD + 1];
-    signal l[MD]; signal r[MD];
-    component h[MD];
-    cur[0] <== leaf;
-    for (var i = 0; i < MD; i++) {
-        bit[i] * (bit[i] - 1) === 0;
-        l[i] <== cur[i] + bit[i] * (sib[i] - cur[i]);
-        r[i] <== sib[i] + bit[i] * (cur[i] - sib[i]);
-        h[i] = Poseidon(2);
-        h[i].inputs[0] <== l[i]; h[i].inputs[1] <== r[i];
-        cur[i + 1] <== h[i].out;
-    }
-    root === cur[MD];
-}
 
 template CapSubset() {
     signal input parent; signal input child;
@@ -66,7 +47,7 @@ template ShadowChain(D, MD, RD, RT, NT) {
     signal input sig_S[D]; signal input sig_R8x[D]; signal input sig_R8y[D];
     signal input cap[D];
     signal input expiry[D];
-    signal input m_sib[D][MD]; signal input m_bit[D][MD];
+    signal input m_depth[D]; signal input m_index[D]; signal input m_sib[D][MD];
     signal input r_low_value[D]; signal input r_low_next_index[D]; signal input r_low_next_value[D];
     signal input r_sib[D][RD]; signal input r_bit[D][RD];
     signal input rt_depth; signal input rt_index; signal input rt_sib[RT];
@@ -90,6 +71,8 @@ template ShadowChain(D, MD, RD, RT, NT) {
     component ch0;
     component ch[D];
     component sg[D];
+    component mtd[D > 1 ? D - 1 : 1];
+    component mtle[D > 1 ? D - 1 : 1];
     component mv[D > 1 ? D - 1 : 1];
     component rv[D];
     component ex[D];
@@ -118,11 +101,16 @@ template ShadowChain(D, MD, RD, RT, NT) {
         sg[i].M <== cert[i];
 
         if (i == 0) {
-            for (var j = 0; j < MD; j++) { m_sib[0][j] === 0; m_bit[0][j] === 0; }
+            m_depth[0] === 0;
+            m_index[0] === 0;
+            for (var j = 0; j < MD; j++) { m_sib[0][j] === 0; }
         } else {
-            mv[i - 1] = MerkleMember(MD);
-            mv[i - 1].leaf <== cert[i]; mv[i - 1].root <== issued_root;
-            for (var j = 0; j < MD; j++) { mv[i - 1].sib[j] <== m_sib[i][j]; mv[i - 1].bit[j] <== m_bit[i][j]; }
+            mtd[i - 1] = Num2Bits(8); mtd[i - 1].in <== m_depth[i];
+            mtle[i - 1] = LessEqThan(8); mtle[i - 1].in[0] <== m_depth[i]; mtle[i - 1].in[1] <== MD; mtle[i - 1].out === 1;
+            mv[i - 1] = BinaryMerkleRoot(MD);
+            mv[i - 1].leaf <== cert[i]; mv[i - 1].depth <== m_depth[i]; mv[i - 1].index <== m_index[i];
+            for (var j = 0; j < MD; j++) { mv[i - 1].siblings[j] <== m_sib[i][j]; }
+            issued_root === mv[i - 1].out;
         }
 
         rv[i] = IMTNonMember(RD);

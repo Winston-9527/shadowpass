@@ -85,7 +85,16 @@ ctx_hash = uint256(keccak256(abi.encode(block.chainid, address(gate), act.method
 
 状态根有宽限窗口；demo 部署时窗口设为几秒。
 
-## 7. 凭证包（用户钱包 → Agent，经信箱加密下发）
+## 7. 配对与凭证包
+
+配对（Agent → 用户钱包，明文，只含公钥）：
+```
+https://shadowpass-wallet.vercel.app/pair#<base64url(JSON)>
+JSON = { "v": 1, "name": "采购 Agent", "agentPk": {"x": "..", "y": ".."}, "boxPk": "<X25519 公钥 hex>" }
+```
+MCP 在终端同时打印这个链接、同样内容的配对码（base64url 字符串）和二维码。只放在 `#` 后面，不进服务器日志。
+
+凭证包（用户钱包 → Agent，经信箱加密下发）：
 
 ```json
 {
