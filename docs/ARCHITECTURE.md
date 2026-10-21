@@ -67,10 +67,11 @@ flowchart TD
 | `types` | `Deployment`、`Identity`、`ViewKey`、`Cert`、`Note`、`Action`、`Bundle`、`OwnerCiphertext`、`BillEntry` | 全部 |
 | `deployment` | `loadDeployment(network \| json)` | 全部 |
 | `certs` | `issueRoot(...)`、`issue(parent, ...)`、`certHash0`、`certHash` | wallet、mcp |
-| `state` | `class ChainState { static sync(client, deployment, opts) ; update() ; roots() ; issued ; revoked ; roots ; notes ; group }` | wallet、mcp、facilitator |
+| `state` | `class ChainState { static sync(client, deployment, opts) ; update() ; roots() ; issued ; revoked ; rootTree ; notes ; group }` | wallet、mcp、facilitator |
 | `witness` | `actionInput`、`registerInput`、`revokeInput`、`transferInput`、`mintInput` | wallet、mcp |
 | `prove` | `loadArtifacts({ baseUrl \| dir, circuit })`（按 MANIFEST 校验）、`prove(circuit, input, artifacts)`、`verify(...)`、`toCalldata(proof, publicSignals)` | wallet、mcp、facilitator |
-| `ctx` | `ctxHash({ chainId, gate, action })`、`reqHash({ network, asset, amount, payTo, resource })` | mcp、facilitator、x402 |
+| `ctx` | `ctxHash({ chainId, gate, action, memoChange })`、`reqHash({ network, asset, amount, payTo, resource })` | mcp、facilitator、x402 |
+| `notes` | `encodeNoteMemo(note, recipientBoxPk)`、`decodeNoteMemo(memo, boxSk)`、`scanNotes(state, logs, { boxSk, holderSks })` | wallet、mcp |
 | `owner` | `encryptChain`、`openChain(ct, vsk)`、`scanBill(state, logs, vsk) -> BillEntry[]` | wallet |
 | `bundle` | `encodeBundle / decodeBundle`、`encodeMessage / decodeMessage`（receipt、delegated） | wallet、mcp |
 | `mailbox` | `class MailboxClient { send(toPk, msg, from) ; poll(kp, after) }` | wallet、mcp |

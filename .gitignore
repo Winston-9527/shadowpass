@@ -11,3 +11,6 @@ cache/
 artifacts/
 apps/wallet/public/zk/
 !.env.example
+packages/sdk/browser/dist/
+packages/sdk/browser/public/fixture.json
+packages/sdk/browser/public/zk/
