@@ -15,9 +15,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@shadowpass/sdk": "*"
-  },
-  "devDependencies": {
+    "@shadowpass/sdk": "*",
     "vite": "8.3.5"
   }
 }
