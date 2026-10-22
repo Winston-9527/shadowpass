@@ -82,11 +82,13 @@ ctx_hash = uint256(keccak256(abi.encode(block.chainid, address(gate), act.method
 
 - `memoChange` 是必填参数（没有找零备忘时传空字节 `0x`，并且调用方必须显式传入）。
 - 电路把 `ctx_hash` 当作不透明的公开输入，所以在哈希里加入 `keccak256(memoChange)` 不需要改电路，却能防止转发方（facilitator）替换找零票据的备忘。
-- `amount` 必须等于 `q_spent`。`requiredCap[method]` 由 Gate 管理员通过 `setMethod` 配置，作为 `act_req_cap` 公开输入。
+- `amount` 必须等于 `q_spent`。管理员用 `setMethod(method, cap, target, enabled)` 配置：`requiredCap[method]` 作为 `act_req_cap` 公开输入，**`act.target` 必须等于为该方法登记的 `target`**（PAY → `ShadowPayout`，TREASURY_SUPPLY → `TreasuryAdapter`）。否则持有 TREASURY 能力的 Agent 可以把 target 指向自己的合约，直接把资金转走。
 - 方法：`PAY = bytes4(keccak256("shadowpass.PAY"))` 要求能力 `PAY`；`TREASURY_SUPPLY = bytes4(keccak256("shadowpass.TREASURY_SUPPLY"))` 要求能力 `TREASURY`。
-- 付款：`target = ShadowPayout`，`params = abi.encode(payTo, reqHash)`，`reqHash = keccak256(abi.encode(string network, address asset, uint256 amount, address payTo, string resourceUrl))`（`network` 是 CAIP-2 字符串，如 `"eip155:84532"`）。
-- 理财存入（定期存款语义）：`method = TREASURY_SUPPLY`，`target = TreasuryAdapter`，`params = abi.encode(vault, term, returnCm, expectedQ, returnMemo)`。到期后任何人可调用 `TreasuryAdapter.withdraw(positionId)`，赎回并以 `returnCm`（面额 `expectedQ`，由理财 Agent 在存入时承诺）存回资金池，同时发出 `returnMemo`；多出的部分进储备，不足时报 `Shortfall` 并不铸票据。
-- 资金流（推送模型）：Gate 在验证通过后先把 `amount` 个代币转给 `target`，再调用 `target.onAuthorized(method, amount, params)`。资金回流只走 `Gate.depositFromAdapter(cm, q, memo)`，只允许白名单 adapter 调用，代币先转入 Gate。
+- 付款：`target = ShadowPayout`，`params = abi.encode(payTo, reqHash)`，`ShadowPayout` 按 `keccak256(abi.encode(payTo, reqHash))` 防重放（只按 `reqHash` 会被别人抢先占用），`reqHash = keccak256(abi.encode(string network, address asset, uint256 amount, address payTo, string resourceUrl))`（`network` 是 CAIP-2 字符串，如 `"eip155:84532"`）。
+- 理财存入（定期存款语义）：`method = TREASURY_SUPPLY`，`target = TreasuryAdapter`，`params = abi.encode(vault, term, returnCm, expectedQ, returnMemo)`。存入时，adapter 必须校验 `returnCm < P`、`returnMemo` 不超过 512 字节、`expectedQ < 2^64`，否则拒绝（不然取回时会永远失败，本金被锁死）。`quote()` 必须是保守估计：模拟 deposit 再 redeem 的取整损失，并至少再减 2 wei。到期后任何人可调用 `TreasuryAdapter.withdraw(positionId)`，赎回并以 `returnCm`（面额 `expectedQ`，由理财 Agent 在存入时承诺）存回资金池，同时发出 `returnMemo`；多出的部分进储备；不足部分如果不超过储备余额，就从储备补足，照常铸票据；超过储备余额时才报 `Shortfall`，不铸票据，资金留在储备里。
+- 资金流：
+  - **付出（推送）**：`execute` 验证通过、记下 nullifier 之后，Gate 先把 `amount` 个代币转给 `target`，再调用 `target.onAuthorized(method, amount, params)`。target 只能使用本次收到的 `amount`，不得动用自己的储备。
+  - **回流（拉取）**：adapter 先 `approve(gate, q)`，再调用 `Gate.depositFromAdapter(cm, q, memo)`；Gate 用 `transferFrom(adapter, gate, q)` 收款，然后插入票据。只允许白名单 adapter 调用；adapter 调用后把授权清零。
 
 ## 6. 链上事件（前端和 MCP 靠它们重建状态）
 
@@ -112,7 +114,9 @@ ctx_hash = uint256(keccak256(abi.encode(block.chainid, address(gate), act.method
 - 拉取日志时用本表事件的 topic0 做过滤（`getLogs` 的 `topics` 参数）。合约可以发出本表以外的事件（管理事件等），它们不会进入同步；本表事件解码失败则报出明确错误，不能静默跳过或崩溃在 `undefined` 上。
 - 同步失败（任意一段 `getLogs` 出错）不能破坏已有状态：在新对象里完整重放，成功后再替换；并发的 `update()` 共享同一个进行中的 Promise。
 
-状态根有宽限窗口；demo 部署时窗口设为几秒。
+根的有效期：
+- **只追加的树**（签发树、票据树、群组树）：接受历史上出现过的任何根（合约记录 `knownRoot[root] = true`）。只追加不会删除成员，旧根依然有效；花费由 nullifier 控制，吊销由撤销树控制。这样，别人频繁 `issue`、`deposit`、`join` 也不会让正在提交的证明失效。
+- **会替换或会增长约束的树**（根凭证树，因为有原位替换；撤销树）：保留宽限窗口。demo 部署时设为 10 秒。
 
 ## 7. 配对与凭证包
 
@@ -203,7 +207,7 @@ memo      = crypto_box_seal(plaintext, recipientBoxPk)                          
 | 方式 | 流程 | gas |
 |---|---|---|
 | 从外部钱包充值（真实流程） | 钱包页面经 EIP-1193（MetaMask 等）连接外部地址 → 本地生成 `budget_mint` 证明和 `cm` → 外部钱包发出 `approve` 和 `Gate.deposit` | 外部地址支付 |
-| 测试网一键领取（演示） | `ShadowToken.faucetDeposit`：代币合约给自己铸币、授权 Gate、代为调用 `deposit`；每地址每天限额 | facilitator 代付 |
+| 测试网一键领取（演示） | `ShadowToken.faucetDeposit`：代币合约给自己铸币、授权 Gate、代为调用 `deposit`。走 facilitator 代付时 `msg.sender` 都是 facilitator，所以合约只设全局每日上限，单个用户的限额由 facilitator 按 IP 控制 | facilitator 代付 |
 
 入金是公开的（谁、何时、多少）。钱包只提供固定面额（10 / 50 / 100），并提示入金后隔一段时间再分给 Agent，以减少关联。分给 Agent 的 `transferBudget` 是私密的。入金得到的票据：`owner = 管家（ent1）`，`lin = [cert0, 0, 0, 0]`。
 
