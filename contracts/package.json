@@ -8,5 +8,10 @@
     "test": "forge test",
     "fixtures": "node script/gen-fixtures.mjs"
   },
-  "devDependencies": { "@shadowpass/circuits": "*" }
+  "devDependencies": {
+    "@shadowpass/circuits": "*"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "5.4.0"
+  }
 }
