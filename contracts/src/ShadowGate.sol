@@ -8,13 +8,12 @@ import {InternalLeanIMT, LeanIMTData} from "zk-kit-lean-imt/InternalLeanIMT.sol"
 import {PoseidonT4} from "poseidon-solidity/PoseidonT4.sol";
 import {ShadowRegistry} from "./ShadowRegistry.sol";
 import {ShadowRevocations} from "./ShadowRevocations.sol";
-
-interface IAgentTarget {
-    function onAuthorized(bytes4 method, uint256 amount, bytes calldata params) external;
-}
+import {IAgentTarget} from "./interfaces/IAgentTarget.sol";
 
 interface IShadowToken {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
+
+    function transfer(address to, uint256 amount) external returns (bool);
 }
 
 interface IBudgetTransferVerifier {
@@ -46,21 +45,20 @@ contract ShadowGate {
     ShadowRevocations public immutable revocations;
     IShadowToken public immutable token;
     address public immutable admin;
-    uint64 public immutable issuedWindow;
-    uint64 public immutable noteWindow;
     uint64 public immutable clockSkew;
     IBudgetTransferVerifier public immutable transferVerifier;
     IBudgetMintVerifier public immutable mintVerifier;
 
     LeanIMTData internal issuedTree;
     LeanIMTData internal notes;
-    mapping(uint256 => uint64) public issuedRootRetiredAt;
-    mapping(uint256 => uint64) public noteRootRetiredAt;
     mapping(bytes32 => uint256) public stateOf;
     mapping(uint256 => bool) public budgetSpent;
     mapping(address => bool) public adapterAllowed;
     mapping(bytes4 => uint32) public requiredCap;
+    mapping(bytes4 => address) public methodTarget;
     mapping(bytes4 => bool) public methodEnabled;
+    mapping(uint256 => bool) public issuedRootKnown;
+    mapping(uint256 => bool) public noteRootKnown;
     uint256 public totalMinted;
 
     error NotAdmin();
@@ -70,6 +68,7 @@ contract ShadowGate {
     error UnregisteredRootRoot();
     error BadClock();
     error UnknownMethod();
+    error TargetMismatch();
     error InvalidProof();
     error BadField();
     error BadCiphertextLength();
@@ -122,8 +121,6 @@ contract ShadowGate {
         address revocations_,
         address token_,
         address admin_,
-        uint64 issuedWindow_,
-        uint64 noteWindow_,
         uint64 clockSkew_,
         address transferVerifier_,
         address mintVerifier_
@@ -141,8 +138,6 @@ contract ShadowGate {
         revocations = ShadowRevocations(revocations_);
         token = IShadowToken(token_);
         admin = admin_;
-        issuedWindow = issuedWindow_;
-        noteWindow = noteWindow_;
         clockSkew = clockSkew_;
         transferVerifier = IBudgetTransferVerifier(transferVerifier_);
         mintVerifier = IBudgetMintVerifier(mintVerifier_);
@@ -159,9 +154,10 @@ contract ShadowGate {
         return string(out);
     }
 
-    function setMethod(bytes4 method, uint32 cap, bool enabled) external {
+    function setMethod(bytes4 method, uint32 cap, address target, bool enabled) external {
         if (msg.sender != admin) revert NotAdmin();
         requiredCap[method] = cap;
+        methodTarget[method] = target;
         methodEnabled[method] = enabled;
     }
 
@@ -179,13 +175,19 @@ contract ShadowGate {
         return notes._root();
     }
 
+    function issuedRootAccepted(uint256 root) external view returns (bool) {
+        return _issuedRootOk(root);
+    }
+
+    function noteRootAccepted(uint256 root) external view returns (bool) {
+        return _noteRootOk(root);
+    }
+
     function issue(uint256 certHash) external {
         if (certHash >= P) revert BadField();
         uint256 index = issuedTree.size;
-        uint256 oldRoot = issuedTree._root();
         uint256 nextRoot = issuedTree._insert(certHash);
-        if (index != 0) issuedRootRetiredAt[oldRoot] = uint64(block.timestamp);
-        issuedRootRetiredAt[nextRoot] = 0;
+        issuedRootKnown[nextRoot] = true;
         emit Issued(certHash, index, nextRoot);
     }
 
@@ -263,6 +265,7 @@ contract ShadowGate {
     ) external {
         if (verifierFor[ct.length] == address(0)) revert BadCiphertextLength();
         if (!methodEnabled[action.method]) revert UnknownMethod();
+        if (action.target != methodTarget[action.method]) revert TargetMismatch();
         if (action.amount >= P || action.nonce >= P) revert BadField();
         if (budget.qSpent != action.amount) revert AmountMismatch();
         uint256 stateRoot = stateOf[keccak256(abi.encode(roots.issued, roots.revoked, roots.root))];
@@ -276,6 +279,7 @@ contract ShadowGate {
             revert InvalidProof();
         }
         _insertNote(budget.cmChange, memoChange);
+        if (!token.transfer(action.target, action.amount)) revert TokenTransferFailed();
         IAgentTarget(action.target).onAuthorized(action.method, action.amount, action.params);
         emit Executed(budget.budgetNf, action.target, action.method, action.amount);
         emit OwnerCiphertext(budget.budgetNf, ct);
@@ -314,31 +318,19 @@ contract ShadowGate {
         if (cm >= P) revert BadField();
         if (memo.length > MAX_MEMO) revert MemoTooLong();
         uint256 index = notes.size;
-        uint256 oldRoot = notes._root();
         uint256 nextRoot = notes._insert(cm);
-        if (index != 0) noteRootRetiredAt[oldRoot] = uint64(block.timestamp);
-        noteRootRetiredAt[nextRoot] = 0;
+        noteRootKnown[nextRoot] = true;
         emit NoteInserted(cm, index, nextRoot);
         emit NoteMemo(cm, memo);
     }
 
-    function _rootOk(uint256 root, uint256 current, mapping(uint256 => uint64) storage retired, uint64 window)
-        internal
-        view
-        returns (bool)
-    {
-        if (root == 0 || current == 0) return false;
-        if (root == current) return true;
-        uint64 retiredAt = retired[root];
-        return retiredAt != 0 && block.timestamp <= uint256(retiredAt) + window;
-    }
-
     function _issuedRootOk(uint256 root) internal view returns (bool) {
-        return _rootOk(root, issuedTree._root(), issuedRootRetiredAt, issuedWindow);
+        if (issuedTree.size == 0) return root == 0;
+        return root != 0 && issuedRootKnown[root];
     }
 
     function _noteRootOk(uint256 root) internal view returns (bool) {
-        return _rootOk(root, notes._root(), noteRootRetiredAt, noteWindow);
+        return root != 0 && noteRootKnown[root];
     }
 
     function _useBudget(uint256 noteRoot_, uint256 nullifier) internal {

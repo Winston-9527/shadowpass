@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-interface IAgentTarget {
-    function onAuthorized(bytes4 method, uint256 amount, bytes calldata params) external;
-}
+import {IAgentTarget} from "../src/interfaces/IAgentTarget.sol";
 
 contract MockToken {
     mapping(address => uint256) public balanceOf;
@@ -15,6 +13,13 @@ contract MockToken {
 
     function approve(address spender, uint256 amount) external returns (bool) {
         allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        require(balanceOf[msg.sender] >= amount, "balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
         return true;
     }
 

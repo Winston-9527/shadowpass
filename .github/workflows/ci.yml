@@ -15,5 +15,6 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - uses: foundry-rs/foundry-toolchain@v1
+      - run: bash contracts/script/check-verifiers.sh
       # circuits need circom and build/ artifacts; they are tested locally (docs/ARCHITECTURE.md §6). contracts' test script runs forge.
       - run: npm test -w packages -w services -w apps -w contracts --if-present
