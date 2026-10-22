@@ -7,7 +7,7 @@ import {
   concatBytes,
   hexToBytes,
   poseidon,
-  randomScalar,
+  random250,
 } from "./crypto.js";
 import { decodeShadowEvent } from "./events.js";
 import type { Identity, Note } from "./types.js";
@@ -79,7 +79,7 @@ export async function decodeNoteMemo(memo: Uint8Array | string, boxSk: Uint8Arra
 export function createNote(owner: Pick<Identity, "Ax" | "Ay">, q: bigint, lineage: bigint[] = []): Note {
   const lin = [0n, 0n, 0n, 0n] as Note["lin"];
   for (let index = 0; index < Math.min(4, lineage.length); index += 1) lin[index] = lineage[index]!;
-  return { own: [owner.Ax, owner.Ay], q, lin, rho: randomScalar() };
+  return { own: [owner.Ax, owner.Ay], q, lin, rho: random250() };
 }
 
 export interface ScanNotesOptions {
@@ -89,7 +89,7 @@ export interface ScanNotesOptions {
 
 export function scanNotes(state: any, logs: any[], options: ScanNotesOptions): Promise<Note[]> {
   return (async () => {
-    const memos = new Map<string, Uint8Array>();
+    const memos = new Map<string, Uint8Array>(state?.memos ?? []);
     const inserted = new Set<string>();
     for (const raw of logs) {
       const event = decodeShadowEvent(raw);

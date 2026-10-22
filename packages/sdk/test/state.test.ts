@@ -3,7 +3,7 @@ import { ShadowWorld } from "@shadowpass/circuits/world";
 import { encodeAbiParameters, encodeEventTopics } from "viem";
 import { shadowEvents } from "../src/events.js";
 import { ChainState } from "../src/state.js";
-import { MerkleTree, stateRoot } from "../src/trees.js";
+import { stateRoot } from "../src/trees.js";
 import type { Deployment } from "../src/types.js";
 
 const deployment: Deployment = {
@@ -30,77 +30,69 @@ const deployment: Deployment = {
 };
 
 describe("ChainState", () => {
-  it("replays all five tree event families and detects spent nullifiers", async () => {
+  it("replays exact event ABI against roots independently built by world.mjs", async () => {
     const world = await ShadowWorld.create("sdk-state");
-    const issued = new MerkleTree();
-    const roots = new MerkleTree();
-    const notes = new MerkleTree();
-    const group = new MerkleTree();
     const issuedLeaf = 11n;
     const rootLeaf = 22n;
+    const replacedLeaf = 23n;
     const noteLeaf = 33n;
     const groupLeaf = 44n;
-    issued.insert(issuedLeaf);
-    roots.insert(rootLeaf);
-    notes.insert(noteLeaf);
-    group.insert(groupLeaf);
+    world.issued.insert(issuedLeaf);
+    world.roots.insert(rootLeaf);
+    world.notes.insert(noteLeaf);
+    world.group.insert(groupLeaf);
     world.revoked.insert(55n);
+    world.roots.update(0, replacedLeaf);
 
     const logs = [
-      { eventName: "Issued", args: { certHash: issuedLeaf, index: 0, newRoot: issued.root }, blockNumber: 1n, logIndex: 0 },
-      { eventName: "Registered", args: { nf: 1n, leaf0: rootLeaf, root: roots.root }, blockNumber: 1n, logIndex: 1 },
-      { eventName: "Joined", args: { commitment: groupLeaf, index: 0, root: group.root }, blockNumber: 2n, logIndex: 0 },
-      { eventName: "NoteInserted", args: { cm: noteLeaf, index: 0, newRoot: notes.root }, blockNumber: 2n, logIndex: 1 },
+      { eventName: "Issued", args: { certHash: issuedLeaf, index: 0, root: world.issued.root }, blockNumber: 1n, logIndex: 0 },
+      { eventName: "Registered", args: { nf: 1n, leaf0: rootLeaf, index: 0, root: rootLeaf }, blockNumber: 1n, logIndex: 1 },
+      { eventName: "Replaced", args: { nf: 1n, oldLeaf0: rootLeaf, newLeaf0: replacedLeaf, index: 0, root: world.roots.root }, blockNumber: 1n, logIndex: 2 },
+      { eventName: "Joined", args: { commitment: groupLeaf, index: 0, root: world.group.root }, blockNumber: 2n, logIndex: 0 },
+      { eventName: "NoteInserted", args: { cm: noteLeaf, index: 0, root: world.notes.root }, blockNumber: 2n, logIndex: 1 },
       { eventName: "NoteMemo", args: { cm: noteLeaf, memo: "0x0102" }, blockNumber: 2n, logIndex: 2 },
       { eventName: "Revoked", args: { entry: 55n, index: 1, oldRoot: 0n, newRoot: world.revoked.root }, blockNumber: 3n, logIndex: 0 },
-      { eventName: "Executed", args: { budgetNf: 99n, target: deployment.payout, method: "0x00000000", amount: 1n }, blockNumber: 3n, logIndex: 1 },
+      { eventName: "NullifierSpent", args: { nullifier: 99n }, blockNumber: 3n, logIndex: 1 },
     ];
 
     const state = ChainState.fromLogs(deployment, logs);
     expect(state.roots()).toEqual({
-      issued: issued.root,
+      issued: world.issued.root,
       revoked: world.revoked.root,
-      root: roots.root,
-      note: notes.root,
-      group: group.root,
-      state: stateRoot(issued.root, world.revoked.root, roots.root),
+      root: world.roots.root,
+      note: world.notes.root,
+      group: world.group.root,
+      state: stateRoot(world.issued.root, world.revoked.root, world.roots.root),
     });
     expect(state.memos.get(noteLeaf.toString())).toEqual(Uint8Array.of(1, 2));
     expect(state.spentNullifiers.has("99")).toBe(true);
   });
 
-  it("supports incremental client replay", async () => {
+  it("fetches logs in bounded batches and replays the full range on update", async () => {
     const calls: Array<{ fromBlock: bigint; toBlock?: bigint }> = [];
     const client = {
       async getLogs(args: { fromBlock: bigint; toBlock?: bigint }) {
         calls.push(args);
         return args.fromBlock === 0n
-          ? [{ eventName: "Joined", args: { commitment: 1n, index: 0, root: 1n }, blockNumber: 4n, logIndex: 0 }]
+          ? [{ eventName: "Joined", args: { commitment: 1n, index: 0, root: 1n }, blockNumber: 1n, logIndex: 0 }]
           : [];
       },
       async getBlockNumber() {
         return 5n;
       },
     };
-    const state = await ChainState.sync(client, deployment, { startBlock: 0 });
-    expect(calls[0]?.fromBlock).toBe(0n);
+    const state = await ChainState.sync(client, deployment, { startBlock: 0, maxBlockRange: 2 });
+    expect(calls.map((call) => call.fromBlock)).toEqual([0n, 2n, 4n]);
     expect(state.roots().group).toBe(1n);
     await state.update();
-    expect(calls[1]?.fromBlock).toBe(6n);
+    expect(calls.slice(-3).map((call) => call.fromBlock)).toEqual([0n, 2n, 4n]);
   });
 
-  it("decodes raw viem event topics and data", () => {
-    const topics = encodeEventTopics({ abi: shadowEvents, eventName: "Joined", args: [] });
-    const data = encodeAbiParameters(
-      [{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
-      [7n, 0n, 7n],
-    );
-    const state = ChainState.fromLogs(deployment, [{
-      topics,
-      data,
-      blockNumber: 1n,
-      logIndex: 0,
-    }]);
+  it("decodes raw viem topics/data and rejects unknown events", () => {
+    const topics = encodeEventTopics({ abi: shadowEvents, eventName: "Joined", args: { commitment: 7n } });
+    const data = encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [0n, 7n]);
+    const state = ChainState.fromLogs(deployment, [{ topics, data, blockNumber: 1n, logIndex: 0 }]);
     expect(state.roots().group).toBe(7n);
+    expect(() => ChainState.fromLogs(deployment, [{ topics: ["0x00"], data: "0x", blockNumber: 1n }])).toThrow(/unknown event topic/);
   });
 });

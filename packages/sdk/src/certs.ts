@@ -1,6 +1,6 @@
-import { KEY_TAG } from "./constants.js";
-import { poseidon, sign } from "./crypto.js";
-import type { Cert, Identity, Point, Signature } from "./types.js";
+import { KEY_TAG, L } from "./constants.js";
+import { BASE8, add, mul, poseidon, sign } from "./crypto.js";
+import type { Cert, CertificateBundle, Identity, Point, Signature } from "./types.js";
 
 export function certHash0(issuer: Identity, holder: Identity, cap: bigint, expiry: bigint, vpk: Point): bigint {
   return poseidon[9]([0n, issuer.Ax, issuer.Ay, holder.Ax, holder.Ay, cap, expiry, vpk.x, vpk.y]);
@@ -53,4 +53,27 @@ export function issue(parent: Cert, holder: Identity, cap: bigint, expiry: bigin
 
 export function signatureToJson(signature: Signature): { S: string; R8x: string; R8y: string } {
   return { S: signature.S.toString(), R8x: signature.R8x.toString(), R8y: signature.R8y.toString() };
+}
+
+export function verifyBundleCert(cert: CertificateBundle["chain"][number]): boolean {
+  try {
+    const issuer = { Ax: BigInt(cert.issuer.x), Ay: BigInt(cert.issuer.y) } as Identity;
+    const holder = { Ax: BigInt(cert.holder.x), Ay: BigInt(cert.holder.y) } as Identity;
+    const expectedHash = cert.hop === 0
+      ? certHash0(issuer, holder, BigInt(cert.cap), BigInt(cert.expiry), {
+          x: BigInt(cert.vpk?.x ?? "0"),
+          y: BigInt(cert.vpk?.y ?? "0"),
+        })
+      : certHash(cert.hop, issuer, holder, BigInt(cert.cap), BigInt(cert.expiry));
+    if (expectedHash !== BigInt(cert.hash)) return false;
+    const signature = { x: BigInt(cert.sig.R8x), y: BigInt(cert.sig.R8y) };
+    const scalar = BigInt(cert.sig.S);
+    if (scalar <= 0n || scalar >= L) return false;
+    const challenge = poseidon[5]([signature.x, signature.y, issuer.Ax, issuer.Ay, expectedHash]);
+    const left = mul(BASE8, scalar);
+    const right = add(signature, mul({ x: issuer.Ax, y: issuer.Ay }, (8n * challenge) % L));
+    return left.x === right.x && left.y === right.y;
+  } catch {
+    return false;
+  }
 }

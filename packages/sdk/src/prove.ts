@@ -1,4 +1,5 @@
 import * as snarkjs from "snarkjs";
+import { ARTIFACT_HASHES } from "./artifact-hashes.js";
 import { bytesToHex } from "./crypto.js";
 
 export type CircuitName =
@@ -22,6 +23,7 @@ export interface LoadArtifactsOptions {
   circuit: CircuitName;
   dir?: string;
   baseUrl?: string;
+  trustedHashes?: Readonly<Record<string, string>>;
 }
 
 function parseManifest(text: string): Map<string, string> {
@@ -71,6 +73,7 @@ export async function loadArtifacts(options: LoadArtifactsOptions): Promise<Arti
   const manifestBytes = await readArtifact(resolved, "MANIFEST.sha256");
   const manifest = new TextDecoder().decode(manifestBytes);
   const entries = parseManifest(manifest);
+  const trustedHashes = options.trustedHashes ?? ARTIFACT_HASHES;
   const wasmName = `${options.circuit}.wasm`;
   const zkeyName = `${options.circuit}.zkey`;
   const vkName = `vk_${options.circuit}.json`;
@@ -84,8 +87,8 @@ export async function loadArtifacts(options: LoadArtifactsOptions): Promise<Arti
     [zkeyName, zkey],
     [vkName, vkBytes],
   ] as const) {
-    const expected = entries.get(filename);
-    if (!expected) throw new Error(`MANIFEST.sha256 does not contain ${filename}`);
+    const expected = trustedHashes[filename] ?? (filename === wasmName ? entries.get(filename) : undefined);
+    if (!expected) throw new Error(`no trusted hash for ${filename}`);
     const actual = await sha256(bytes);
     if (actual !== expected) throw new Error(`${filename} hash mismatch`);
   }

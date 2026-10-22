@@ -35,7 +35,7 @@ export interface ReqHashInput {
   resource: string;
 }
 
-export function ctxHash({ chainId, gate, action, memoChange = "0x" }: CtxHashInput): bigint {
+export function ctxHash({ chainId, gate, action, memoChange }: CtxHashInput): bigint {
   const encoded = encodeAbiParameters(ctxParameters, [
     BigInt(chainId),
     gate,

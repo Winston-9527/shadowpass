@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ShadowWorld } from "@shadowpass/circuits/world";
-import { certHash, issueRoot } from "../src/certs.js";
+import { certHash, issueRoot, keyEntry } from "../src/certs.js";
 import { ChainState } from "../src/state.js";
 import type { Cert } from "../src/types.js";
 import {
@@ -8,6 +8,7 @@ import {
   mintInput,
   registerInput,
   revokeCertInput,
+  revokeKeyInput,
   transferInput,
 } from "../src/witness.js";
 
@@ -149,6 +150,16 @@ describe("witness parity with circuits/scripts/world.mjs", () => {
     const expectedRevoke = expected.world.revokeCertInput(expected.c1, expected.steward).input;
     const actualRevoke = revokeCertInput(sdkCert(actual.c1), actual.steward, 0, actualState).input;
     expect(actualRevoke).toEqual(expectedRevoke);
+    expect(() => revokeCertInput({ ...sdkCert(actual.c0), ownW: undefined }, actual.steward, 0, actualState)).toThrow(/requires ownW/);
+    const expectedKeyRevoke = expected.world.revokeInput({
+      entry: keyEntry(expected.buyer),
+      kind: 0,
+      who: 0,
+      ia: [expected.buyer.Ax, expected.buyer.Ay],
+      sk: expected.buyer.sk,
+    }).input;
+    const actualKeyRevoke = revokeKeyInput(actual.buyer, actual.buyer, actualState).input;
+    expect(actualKeyRevoke).toEqual(expectedKeyRevoke);
 
     const expectedTransfer = expected.world.transferInput({
       holder: expected.steward,

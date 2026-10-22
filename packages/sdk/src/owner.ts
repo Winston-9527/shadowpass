@@ -4,7 +4,9 @@ import { decodeShadowEvent } from "./events.js";
 import type { BillEntry, OwnerCiphertext, Point } from "./types.js";
 
 function scalarBelow(bytes: Uint8Array): bigint {
-  return bytesToBigInt(bytes) % L;
+  let value = bytesToBigInt(bytes) % L;
+  while (value === 0n) value = bytesToBigInt(randomBytes(32)) % L;
+  return value;
 }
 
 export function encryptChain(
@@ -83,7 +85,7 @@ function ownerCiphertextFromArgs(args: Record<string, unknown>): OwnerCiphertext
 }
 
 export function scanBill(state: any, logs: any[], viewSecret: bigint): BillEntry[] {
-  const decoded = logs.map(decodeShadowEvent).filter(Boolean) as ReturnType<typeof decodeShadowEvent>[];
+  const decoded = logs.map((log) => decodeShadowEvent(log)).filter(Boolean) as ReturnType<typeof decodeShadowEvent>[];
   const executions = new Map<string, any>();
   for (const event of decoded) {
     if (event?.name === "Executed") executions.set(String(event.args.budgetNf), event);

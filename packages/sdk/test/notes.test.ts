@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { encodeAbiParameters, encodeEventTopics } from "viem";
+import { bytesToHex } from "../src/crypto.js";
+import { shadowEvents } from "../src/events.js";
 import { deriveKeys } from "../src/keys.js";
 import {
   budgetNullifier,
@@ -18,6 +21,23 @@ const note: Note = {
   rho: 15n,
 };
 
+function noteLogs(cm: bigint, memo: Uint8Array) {
+  return [
+    {
+      topics: encodeEventTopics({ abi: shadowEvents, eventName: "NoteInserted", args: { cm } }),
+      data: encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [0n, 0n]),
+      blockNumber: 1n,
+      logIndex: 0,
+    },
+    {
+      topics: encodeEventTopics({ abi: shadowEvents, eventName: "NoteMemo", args: { cm } }),
+      data: encodeAbiParameters([{ type: "bytes" }], [bytesToHex(memo)]),
+      blockNumber: 1n,
+      logIndex: 1,
+    },
+  ];
+}
+
 describe("note memos", () => {
   it("encodes the frozen 233-byte plaintext and seals to 281 bytes", async () => {
     const keys = await deriveKeys(seed);
@@ -27,16 +47,18 @@ describe("note memos", () => {
     expect(await decodeNoteMemo(memo, keys.box.privateKey)).toEqual(note);
   });
 
+  it("positively scans a raw viem NoteMemo event", async () => {
+    const keys = await deriveKeys(seed);
+    const memo = await encodeNoteMemo(note, keys.box.publicKey);
+    const state = { spentNullifiers: new Set<string>(), memos: new Map([[noteCm(note).toString(), memo]]) };
+    expect(await scanNotes(state, noteLogs(noteCm(note), memo).slice(0, 1), { boxSk: keys.box.privateKey, holderSks: [keys.steward.sk] })).toEqual([note]);
+  });
+
   it("drops a memo that decrypts but does not open to the event cm", async () => {
     const keys = await deriveKeys(seed);
-    const other = { ...note, q: 999n };
-    const memo = await encodeNoteMemo(other, keys.box.publicKey);
-    const state = { spentNullifiers: new Set<string>() };
-    const logs = [
-      { eventName: "NoteInserted", args: { cm: noteCm(note).toString(), index: "0", newRoot: "0" }, blockNumber: 1n, logIndex: 0 },
-      { eventName: "NoteMemo", args: { cm: noteCm(note).toString(), memo }, blockNumber: 1n, logIndex: 1 },
-    ];
-    expect(await scanNotes(state, logs, { boxSk: keys.box.privateKey, holderSks: [keys.steward.sk] })).toEqual([]);
+    const memo = await encodeNoteMemo({ ...note, q: 999n }, keys.box.publicKey);
+    const state = { spentNullifiers: new Set<string>(), memos: new Map<string, Uint8Array>() };
+    expect(await scanNotes(state, noteLogs(noteCm(note), memo), { boxSk: keys.box.privateKey, holderSks: [keys.steward.sk] })).toEqual([]);
   });
 
   it("cannot open another recipient's memo and excludes spent notes", async () => {
@@ -45,12 +67,10 @@ describe("note memos", () => {
     const memo = await encodeNoteMemo(note, owner.box.publicKey);
     expect(await decodeNoteMemo(memo, other.box.privateKey)).toBeNull();
 
-    const cm = noteCm(note).toString();
-    const state = { spentNullifiers: new Set([budgetNullifier(owner.steward.sk, note).toString()]) };
-    const logs = [
-      { eventName: "NoteInserted", args: { cm, index: "0", newRoot: "0" }, blockNumber: 1n, logIndex: 0 },
-      { eventName: "NoteMemo", args: { cm, memo }, blockNumber: 1n, logIndex: 1 },
-    ];
-    expect(await scanNotes(state, logs, { boxSk: owner.box.privateKey, holderSks: [owner.steward.sk] })).toEqual([]);
+    const state = {
+      spentNullifiers: new Set([budgetNullifier(owner.steward.sk, note).toString()]),
+      memos: new Map<string, Uint8Array>(),
+    };
+    expect(await scanNotes(state, noteLogs(noteCm(note), memo), { boxSk: owner.box.privateKey, holderSks: [owner.steward.sk] })).toEqual([]);
   });
 });

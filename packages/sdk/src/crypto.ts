@@ -2,7 +2,7 @@ import createBlakeHash from "blake-hash";
 import { Buffer } from "buffer";
 import { buildBabyjub, buildEddsa } from "circomlibjs";
 import { Scalar } from "ffjavascript";
-import { poseidon2, poseidon3, poseidon7, poseidon8, poseidon9 } from "poseidon-lite";
+import { poseidon2, poseidon3, poseidon5, poseidon7, poseidon8, poseidon9 } from "poseidon-lite";
 import { L, P } from "./constants.js";
 import type { Identity, Point, ViewKey } from "./types.js";
 
@@ -34,6 +34,7 @@ export const GENERATOR: Point = toPoint(babyJub.Generator);
 export const poseidon = {
   2: (values: readonly bigint[]): bigint => BigInt(poseidon2([...values])),
   3: (values: readonly bigint[]): bigint => BigInt(poseidon3([...values])),
+  5: (values: readonly bigint[]): bigint => BigInt(poseidon5([...values])),
   7: (values: readonly bigint[]): bigint => BigInt(poseidon7([...values])),
   8: (values: readonly bigint[]): bigint => BigInt(poseidon8([...values])),
   9: (values: readonly bigint[]): bigint => BigInt(poseidon9([...values])),
@@ -50,6 +51,10 @@ export function randomScalar(bound: bigint = L): bigint {
     const value = bytesToBigInt(randomBytes(32)) % bound;
     if (value !== 0n) return value;
   }
+}
+
+export function random250(): bigint {
+  return bytesToBigInt(randomBytes(32)) % (1n << 250n);
 }
 
 export function bytesToBigInt(bytes: Uint8Array): bigint {

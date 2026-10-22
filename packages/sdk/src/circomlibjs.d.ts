@@ -21,3 +21,8 @@ declare module "blake-hash" {
 
 declare module "libsodium-wrappers";
 declare module "snarkjs";
+declare module "@shadowpass/circuits/world" {
+  export const ShadowWorld: any;
+  export function identity(prv: Uint8Array): any;
+  export function openChain(ct: any, vsk: bigint): any;
+}

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { verifyBundleCert } from "./certs.js";
 import type { CertificateBundle, MailboxMessage } from "./types.js";
 
 const scalar = z.string().regex(/^(0|[1-9][0-9]*)$/);
@@ -64,7 +65,11 @@ export function encodeBundle(bundle: CertificateBundle): string {
 }
 
 export function decodeBundle(encoded: string): CertificateBundle {
-  return CertificateBundleSchema.parse(JSON.parse(decoder.decode(base64UrlDecode(encoded)))) as CertificateBundle;
+  const bundle = CertificateBundleSchema.parse(JSON.parse(decoder.decode(base64UrlDecode(encoded)))) as CertificateBundle;
+  for (const [index, cert] of bundle.chain.entries()) {
+    if (!verifyBundleCert(cert)) throw new Error(`invalid certificate signature at hop ${index}`);
+  }
+  return bundle;
 }
 
 export function encodeMessage(message: MailboxMessage): string {

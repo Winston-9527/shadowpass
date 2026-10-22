@@ -23,7 +23,7 @@ export interface NonMembershipWitness {
 const hashPair = (left: bigint, right: bigint): bigint => poseidon[2]([left, right]);
 
 export class MerkleTree {
-  readonly tree: LeanIMT<bigint>;
+  tree: LeanIMT<bigint>;
 
   constructor(leaves: bigint[] = []) {
     this.tree = new LeanIMT(hashPair, leaves);
@@ -51,6 +51,10 @@ export class MerkleTree {
 
   insertMany(leaves: bigint[]): void {
     this.tree.insertMany(leaves);
+  }
+
+  clear(): void {
+    this.tree = new LeanIMT(hashPair);
   }
 
   update(index: number, leaf: bigint): void {
@@ -86,6 +90,10 @@ export class MerkleTree {
     const tree = new MerkleTree();
     (tree as { tree: LeanIMT<bigint> }).tree = LeanIMT.import(hashPair, exported, (value) => BigInt(value));
     return tree;
+  }
+
+  reset(): void {
+    this.clear();
   }
 }
 
@@ -194,6 +202,12 @@ export class IndexedMerkleTree {
 
   clone(): IndexedMerkleTree {
     return new IndexedMerkleTree(this.depth, this.leaves, this.levels);
+  }
+
+  reset(): void {
+    this.leaves = [];
+    this.levels = Array.from({ length: this.depth + 1 }, () => new Map());
+    this.setLeaf(0, { value: 0n, nextIndex: 0n, nextValue: 0n });
   }
 }
 

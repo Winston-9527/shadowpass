@@ -218,6 +218,7 @@ export function revokeCertInput(
   state: ChainState,
   ownW?: Point,
 ): { input: WitnessInput; newRoot: bigint; nextIndex: bigint } {
+  if (cert.hop === 0 && !(ownW ?? cert.ownW)) throw new Error("root certificate revocation requires ownW");
   return revokeInput({
     entry: cert.hash,
     kind: 1n,
@@ -230,6 +231,21 @@ export function revokeCertInput(
     signerSk: writer.sk,
     state,
     ownW: ownW ?? cert.ownW,
+  });
+}
+
+export function revokeKeyInput(
+  holder: Identity,
+  writer: Identity = holder,
+  state: ChainState,
+): { input: WitnessInput; newRoot: bigint; nextIndex: bigint } {
+  return revokeInput({
+    entry: keyEntry(holder),
+    kind: 0n,
+    who: 0n,
+    issuer: { x: holder.Ax, y: holder.Ay },
+    signerSk: writer.sk,
+    state,
   });
 }
 

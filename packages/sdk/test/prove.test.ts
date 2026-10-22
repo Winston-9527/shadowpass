@@ -18,11 +18,15 @@ describe("artifact loading", () => {
       .map(([name, bytes]) => `${createHash("sha256").update(bytes).digest("hex")}  ${name}`)
       .join("\n");
     await writeFile(join(dir, "MANIFEST.sha256"), `${manifest}\n`);
-    const artifacts = await loadArtifacts({ dir, circuit: "budget_mint" });
+    await expect(loadArtifacts({ dir, circuit: "budget_mint" })).rejects.toThrow(/hash mismatch/);
+    const trustedHashes = Object.fromEntries(
+      Object.entries(files).map(([name, bytes]) => [name, createHash("sha256").update(bytes).digest("hex")]),
+    );
+    const artifacts = await loadArtifacts({ dir, circuit: "budget_mint", trustedHashes });
     expect(artifacts.wasm).toEqual(files["budget_mint.wasm"]);
     expect(artifacts.vk).toEqual({ vk: true });
 
     await writeFile(join(dir, "budget_mint.wasm"), Uint8Array.of(9));
-    await expect(loadArtifacts({ dir, circuit: "budget_mint" })).rejects.toThrow(/hash mismatch/);
+    await expect(loadArtifacts({ dir, circuit: "budget_mint", trustedHashes })).rejects.toThrow(/hash mismatch/);
   });
 });
