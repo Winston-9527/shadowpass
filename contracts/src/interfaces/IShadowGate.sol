@@ -10,6 +10,6 @@ interface IShadowGate {
 
     function deposit(Proof calldata proof, uint256 cm, uint256 q, bytes calldata memo) external;
 
-    /// The adapter transfers `q` tokens to the Gate before calling this function.
+    /// The adapter approves `q` tokens; the Gate pulls them with transferFrom.
     function depositFromAdapter(uint256 cm, uint256 q, bytes calldata memo) external;
 }

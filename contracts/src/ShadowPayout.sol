@@ -35,8 +35,9 @@ contract ShadowPayout is IAgentTarget {
 
         (address payTo, bytes32 reqHash) = abi.decode(params, (address, bytes32));
         if (payTo == address(0)) revert ZeroPayTo();
-        if (paid[reqHash]) revert RequestAlreadyPaid();
-        paid[reqHash] = true;
+        bytes32 paymentKey = keccak256(abi.encode(payTo, reqHash));
+        if (paid[paymentKey]) revert RequestAlreadyPaid();
+        paid[paymentKey] = true;
 
         token.safeTransfer(payTo, amount);
         emit Paid(reqHash, payTo, amount);

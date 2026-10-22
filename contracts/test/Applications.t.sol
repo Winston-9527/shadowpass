@@ -38,6 +38,17 @@ contract MockShadowGate is IShadowGate {
         IAgentTarget(target).onAuthorized(method, amount, params);
     }
 
+    function executeTargetUnderfunded(
+        address target,
+        bytes4 method,
+        uint256 amount,
+        uint256 sent,
+        bytes calldata params
+    ) external {
+        token.transfer(target, sent);
+        IAgentTarget(target).onAuthorized(method, amount, params);
+    }
+
     function deposit(Proof calldata proof, uint256 cm, uint256 q, bytes calldata memo) external {
         proof;
         token.transferFrom(msg.sender, address(this), q);
@@ -48,6 +59,7 @@ contract MockShadowGate is IShadowGate {
     }
 
     function depositFromAdapter(uint256 cm, uint256 q, bytes calldata memo) external {
+        token.transferFrom(msg.sender, address(this), q);
         adapterDeposits++;
         lastAdapterCm = cm;
         lastAdapterQ = q;
@@ -92,7 +104,11 @@ contract ApplicationsTest is Test {
         gate.executeTarget(address(payout), MethodIds.PAY, amount, params);
 
         assertEq(token.balanceOf(merchant), amount);
-        assertTrue(payout.paid(reqHash));
+        assertTrue(payout.paid(keccak256(abi.encode(merchant, reqHash))));
+
+        address otherMerchant = address(0xCAFE);
+        gate.executeTarget(address(payout), MethodIds.PAY, amount, abi.encode(otherMerchant, reqHash));
+        assertEq(token.balanceOf(otherMerchant), amount);
 
         vm.expectRevert(ShadowPayout.RequestAlreadyPaid.selector);
         gate.executeTarget(address(payout), MethodIds.PAY, amount, params);
@@ -156,6 +172,35 @@ contract ApplicationsTest is Test {
         adapter.withdraw(positionId);
     }
 
+    function test_treasury_withdraw_at_maturity_has_no_rounding_shortfall() public {
+        uint256 amount = 10 * 10 ** 6;
+        uint256 expectedQ = adapter.quote(address(vault), amount, TERM);
+        uint256 positionId = _supply(amount, expectedQ, 0x1234, hex"01");
+        (, uint256 shares, uint256 maturity,,,,) = adapter.positions(positionId);
+
+        vm.warp(maturity);
+        assertGe(vault.previewRedeem(shares), expectedQ);
+        vm.prank(address(0xB0B));
+        adapter.withdraw(positionId);
+        assertEq(gate.adapterDeposits(), 1);
+    }
+
+    function test_treasury_quote_accounts_for_existing_shares() public {
+        uint256 firstAmount = 10 * 10 ** 6;
+        uint256 firstExpectedQ = adapter.quote(address(vault), firstAmount, TERM);
+        _supply(firstAmount, firstExpectedQ, 0x11, hex"11");
+
+        uint256 secondAmount = 3 * 10 ** 6;
+        uint256 secondExpectedQ = adapter.quote(address(vault), secondAmount, TERM);
+        uint256 secondId = _supply(secondAmount, secondExpectedQ, 0x22, hex"22");
+        (, uint256 secondShares, uint256 secondMaturity,,,,) = adapter.positions(secondId);
+
+        vm.warp(secondMaturity);
+        assertGe(vault.previewRedeem(secondShares), secondExpectedQ);
+        adapter.withdraw(secondId);
+        assertEq(gate.adapterDeposits(), 1);
+    }
+
     function test_treasury_rejects_early_withdrawal_and_non_whitelisted_vault() public {
         uint256 amount = 1 * 10 ** 6;
         uint256 positionId = _supply(amount, amount, 1, hex"01");
@@ -169,6 +214,19 @@ contract ApplicationsTest is Test {
 
         params = abi.encode(address(vault), TERM, uint256(2), uint256(0), hex"02");
         vm.expectRevert(TreasuryAdapter.ZeroExpectedQ.selector);
+        gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, amount, params);
+
+        params = abi.encode(address(vault), TERM, uint256(2), uint256(1) << 64, hex"02");
+        vm.expectRevert(TreasuryAdapter.BadField.selector);
+        gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, amount, params);
+
+        params = abi.encode(address(vault), TERM, uint256(1) << 255, amount, hex"02");
+        vm.expectRevert(TreasuryAdapter.BadField.selector);
+        gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, amount, params);
+
+        bytes memory longMemo = new bytes(513);
+        params = abi.encode(address(vault), TERM, uint256(2), amount, longMemo);
+        vm.expectRevert(TreasuryAdapter.MemoTooLong.selector);
         gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, amount, params);
     }
 
@@ -190,6 +248,48 @@ contract ApplicationsTest is Test {
         assertEq(gate.adapterDeposits(), 0);
     }
 
+    function test_treasury_reserve_covers_small_shortfall() public {
+        MockVault noYield = new MockVault(IERC20(address(token)), "No Yield", "zero", 0, 0);
+        adapter.setVault(address(noYield), true);
+
+        uint256 firstAmount = 5 * 10 ** 6;
+        bytes memory firstParams = abi.encode(address(noYield), TERM, uint256(1), firstAmount + 1, hex"01");
+        gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, firstAmount, firstParams);
+        uint256 firstId = adapter.nextPositionId() - 1;
+        vm.warp(block.timestamp + TERM + 1);
+        adapter.withdraw(firstId);
+        assertEq(adapter.reserve(), firstAmount);
+
+        uint256 secondAmount = 1 * 10 ** 6;
+        uint256 secondExpectedQ = secondAmount + 2;
+        bytes memory secondParams = abi.encode(address(noYield), TERM, uint256(2), secondExpectedQ, hex"02");
+        gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, secondAmount, secondParams);
+        uint256 secondId = adapter.nextPositionId() - 1;
+        vm.warp(block.timestamp + TERM + 1);
+        adapter.withdraw(secondId);
+
+        assertEq(adapter.reserve(), firstAmount - 2);
+        assertEq(gate.adapterDeposits(), 1);
+        assertEq(gate.lastAdapterQ(), secondExpectedQ);
+    }
+
+    function test_treasury_rejects_underfunded_push_with_reserve() public {
+        MockVault noYield = new MockVault(IERC20(address(token)), "No Yield", "zero", 0, 0);
+        adapter.setVault(address(noYield), true);
+        uint256 reserveAmount = 5 * 10 ** 6;
+        bytes memory params = abi.encode(address(noYield), TERM, uint256(1), reserveAmount + 1, hex"01");
+        gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, reserveAmount, params);
+        uint256 positionId = adapter.nextPositionId() - 1;
+        vm.warp(block.timestamp + TERM + 1);
+        adapter.withdraw(positionId);
+        assertEq(adapter.reserve(), reserveAmount);
+
+        uint256 amount = 1 * 10 ** 6;
+        params = abi.encode(address(noYield), TERM, uint256(2), amount, hex"02");
+        vm.expectRevert(TreasuryAdapter.MissingFunds.selector);
+        gate.executeTargetUnderfunded(address(adapter), MethodIds.TREASURY_SUPPLY, amount, amount - 1, params);
+    }
+
     function test_treasury_only_gate() public {
         bytes memory params = abi.encode(address(vault), TERM, uint256(1), uint256(1), hex"");
         vm.expectRevert(TreasuryAdapter.NotGate.selector);
@@ -199,19 +299,31 @@ contract ApplicationsTest is Test {
     function test_faucet_daily_limit_resets() public {
         address user = address(0xA11CE);
         vm.prank(user);
-        token.faucet(70 * 10 ** 6);
+        token.faucetAmount(70 * 10 ** 6);
         vm.prank(user);
-        token.faucet(30 * 10 ** 6);
-        assertEq(token.remainingFaucet(user), 0);
+        token.faucetAmount(30 * 10 ** 6);
+        assertEq(token.remainingFaucet(), 0);
 
         vm.prank(user);
         vm.expectRevert(ShadowToken.FaucetLimit.selector);
-        token.faucet(1);
+        token.faucetAmount(1);
 
         vm.warp(block.timestamp + DAY);
         vm.prank(user);
-        token.faucet(1 * 10 ** 6);
-        assertEq(token.remainingFaucet(user), 99 * 10 ** 6);
+        token.faucetAmount(1 * 10 ** 6);
+        assertEq(token.remainingFaucet(), 99 * 10 ** 6);
+    }
+
+    function test_faucet_limit_is_global() public {
+        vm.prank(address(0xA11CE));
+        token.faucetAmount(70 * 10 ** 6);
+        vm.prank(address(0xB0B));
+        token.faucetAmount(30 * 10 ** 6);
+        assertEq(token.remainingFaucet(), 0);
+
+        vm.prank(address(0xA11CE));
+        vm.expectRevert(ShadowToken.FaucetLimit.selector);
+        token.faucetAmount(1);
     }
 
     function test_faucet_deposit_passes_exact_memo_and_limit() public {
@@ -229,7 +341,7 @@ contract ApplicationsTest is Test {
         assertEq(gate.lastDepositQ(), q);
         assertEq(gate.lastDepositMemo(), memo);
         assertEq(token.allowance(address(token), address(gate)), 0);
-        assertEq(token.remainingFaucet(user), 0);
+        assertEq(token.remainingFaucet(), 0);
 
         vm.prank(user);
         vm.expectRevert(ShadowToken.FaucetLimit.selector);
