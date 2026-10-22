@@ -102,3 +102,19 @@ D2 旧 A1 verifier 链上验证 291,606 gas；A2 verifier 的 gas 由合约工�
 cd vendor/zk-hada-exp/work/t4_contracts && npm ci && cd foundry && forge test --match-contract 'V92Test|V92PolicyTest'   # 45 tests
 cd vendor/zk-hada-exp/work/t2_circuit_fix/zkdac_v7 && npm ci && cd ../zkdac_v9_2 && node scripts/smoke.mjs                 # needs build/, see docs/PROVENANCE.md
 ```
+
+## 本地链
+
+```bash
+npm install
+npm run dev:chain
+```
+
+脚本会启动 Anvil、部署全部合约、写入 `deployments/anvil.json`，并给三个 Anvil 测试账户各发 `1000 spUSD`。默认 Anvil 私钥只用于本地链；需要测试网部署时，把 `DEPLOYER_PK`、`BASE_SEPOLIA_RPC` 放进本地 `.env`，然后运行：
+
+```bash
+set -a && source .env && set +a
+(cd contracts && forge script script/Deploy.s.sol:Deploy --rpc-url "$BASE_SEPOLIA_RPC" --broadcast)
+```
+
+不要提交 `.env` 或任何测试网私钥。
