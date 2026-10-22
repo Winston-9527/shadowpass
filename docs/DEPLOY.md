@@ -45,13 +45,25 @@ Output Directory: dist
 
 框架预设用 Vite（或 Other）都可以，`vercel.json` 已显式给出命令和产物目录。
 
-## 2. 环境变量
+## 2. 自动部署与通知
+
+`vercel.json` 里的 `git.deploymentEnabled` 只允许 `main` 触发部署，其他分支 push 不会建 preview、也不会生成 Vercel check：
+
+```json
+"git": { "deploymentEnabled": { "main": true, "**": false } }
+```
+
+> `**` 兜底是必须的：**没列出来的分支默认是 `true`**，只写 `{"main": true}` 等于没关。需要给某个分支开预览时，把它加进去（值为 `true`）。
+
+Vercel 项目里 Git 评论（PR 上的部署链接）也已关闭。剩下的邮件是团队级 `Deployment Failures` 通知，只能本人关：团队切换器 → Settings → Account → **My Notifications**，把 Deployment Failures 的 **Email** 勾掉（Vercel 不允许两个渠道全关，但可以只留 Web）。
+
+## 3. 环境变量
 
 静态占位页不需要环境变量。后续接入链上交互时再加，清单见 `.env.example`；其中 `SHADOWPASS_ARTIFACTS` 默认指向本域名的 `/zk/circuits-v<N>/`。
 
 注意：只有 `VITE_` 前缀的变量会进浏览器包，密钥类变量（`DEPLOYER_PK`、`FACILITATOR_PK`）**绝不能**加 `VITE_`。
 
-## 3. 证明产物
+## 4. 证明产物
 
 `circuits/scripts/publish-artifacts.sh` 把 wasm、zkey、vk 复制到 `apps/wallet/public/zk/circuits-v<N>/`（该目录 git-ignored，不进仓库）。
 
@@ -62,7 +74,7 @@ Output Directory: dist
 
 产物由 SDK 内置的哈希表校验（`packages/sdk/scripts/generate-artifact-hashes.mjs` 从 `circuits/zk/MANIFEST.sha256` 生成），不依赖托管方自报的 MANIFEST。
 
-## 4. 验证
+## 5. 验证
 
 ```bash
 npm ci
@@ -77,7 +89,7 @@ npx serve apps/wallet/dist               # 本地看效果
 curl -sI https://shadowpass-wallet.vercel.app | head -1
 ```
 
-## 5. 常见报错
+## 6. 常见报错
 
 | 报错 | 原因 | 处理 |
 |---|---|---|

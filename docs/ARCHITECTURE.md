@@ -78,6 +78,17 @@ flowchart TD
 
 在 #6 交付之前，其他工单可以先写调用方代码，用 mock 实现这些签名。签名有变化时，#6 必须同步更新本表。
 
+### 3.1 `@shadowpass/x402`（工单 #8 实现）
+
+对外 API 见 `docs/INTERFACES.md` §8.4。x402 包只负责协议层：凭据 schema、§8.3 的检查、商家端和 facilitator 端的 scheme。**证明由调用方通过 `ShadowpassPaymentBuilder` 回调提供**，x402 包不依赖 Agent 的密钥和凭证。依赖：`@shadowpass/sdk`（`ctx`、`types`）、`@x402/core` 2.28.0、viem、zod。
+
+### 3.2 `@shadowpass/mcp`（工单 #7 实现）
+
+- `src/store.ts`：本地数据目录（默认 `~/.shadowpass/agents/<name>/`，权限 0700，文件 0600），保存 holder 私钥、信箱私钥、凭证包、票据、收据游标。
+- `src/payment-builder.ts`：实现 `ShadowpassPaymentBuilder`（§8.4 的 5 个步骤）。
+- `src/server.ts`：MCP 工具 `wallet_status`、`pay`、`list_receipts`、`treasury_supply`、`treasury_status`（P1：`delegate`）。
+- 链上状态：`sdk.state.ChainState`，地址从 `deployments/<network>.json` 读取。
+
 ## 4. 证明产物的分发
 
 - `circuits/scripts/publish-artifacts.sh`（#2 编写）：把 wasm、zkey、vk、`MANIFEST.sha256` 复制到 `apps/wallet/public/zk/circuits-v<N>/`（不进 git）。
