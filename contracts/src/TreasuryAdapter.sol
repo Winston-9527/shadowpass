@@ -16,6 +16,9 @@ contract TreasuryAdapter is IAgentTarget, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     bytes4 public constant TREASURY_SUPPLY = bytes4(keccak256("shadowpass.TREASURY_SUPPLY"));
+    uint256 private constant P = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
+    uint256 private constant MAX_MEMO = 512;
+    uint256 private constant ROUNDING_MARGIN = 2;
 
     struct Position {
         address vault;
@@ -46,6 +49,8 @@ contract TreasuryAdapter is IAgentTarget, Ownable, ReentrancyGuard {
     error ZeroExpectedQ();
     error ZeroShares();
     error MissingFunds();
+    error BadField();
+    error MemoTooLong();
 
     event VaultAllowed(address indexed vault, bool allowed);
     event PositionOpened(
@@ -76,13 +81,16 @@ contract TreasuryAdapter is IAgentTarget, Ownable, ReentrancyGuard {
         if (msg.sender != gate) revert NotGate();
         if (method != TREASURY_SUPPLY) revert UnknownMethod();
         if (amount == 0) revert ZeroAmount();
-        if (token.balanceOf(address(this)) < amount) revert MissingFunds();
+        uint256 balance = token.balanceOf(address(this));
+        if (balance < reserve || balance - reserve < amount) revert MissingFunds();
 
         (address vault, uint256 term, uint256 returnCm, uint256 expectedQ, bytes memory returnMemo) =
             abi.decode(params, (address, uint256, uint256, uint256, bytes));
         if (!vaultAllowed[vault]) revert VaultNotAllowed();
         if (term == 0) revert ZeroTerm();
         if (expectedQ == 0) revert ZeroExpectedQ();
+        if (returnCm >= P || expectedQ >= (1 << 64)) revert BadField();
+        if (returnMemo.length > MAX_MEMO) revert MemoTooLong();
 
         token.forceApprove(vault, amount);
         uint256 shares = IERC4626(vault).deposit(amount, address(this));
@@ -112,11 +120,12 @@ contract TreasuryAdapter is IAgentTarget, Ownable, ReentrancyGuard {
         if (assets >= expectedQ) {
             uint256 reserveAdded = assets - expectedQ;
             reserve += reserveAdded;
-            if (expectedQ != 0) {
-                token.safeTransfer(gate, expectedQ);
-                IShadowGate(gate).depositFromAdapter(returnCm, expectedQ, returnMemo);
-            }
+            _returnNote(returnCm, expectedQ, returnMemo);
             emit TreasuryWithdrawn(positionId, assets, expectedQ, reserveAdded);
+        } else if (expectedQ - assets <= reserve) {
+            reserve -= expectedQ - assets;
+            _returnNote(returnCm, expectedQ, returnMemo);
+            emit TreasuryWithdrawn(positionId, assets, expectedQ, 0);
         } else {
             reserve += assets;
             emit Shortfall(positionId, expectedQ, assets);
@@ -127,10 +136,16 @@ contract TreasuryAdapter is IAgentTarget, Ownable, ReentrancyGuard {
         if (amount == 0 || term == 0) return 0;
         uint256 shares = IERC4626(vault).previewDeposit(amount);
         uint256 fallbackQ = IERC4626(vault).previewRedeem(shares);
-        try IMockVaultQuote(vault).previewDepositAt(amount, term) returns (uint256 quoted) {
-            return quoted;
-        } catch {
-            return fallbackQ;
-        }
+        uint256 quoted = fallbackQ;
+        try IMockVaultQuote(vault).previewDepositRedeemAt(amount, term) returns (uint256 futureQ) {
+            quoted = futureQ;
+        } catch {}
+        return quoted > ROUNDING_MARGIN ? quoted - ROUNDING_MARGIN : 0;
+    }
+
+    function _returnNote(uint256 returnCm, uint256 expectedQ, bytes memory returnMemo) private {
+        token.forceApprove(gate, expectedQ);
+        IShadowGate(gate).depositFromAdapter(returnCm, expectedQ, returnMemo);
+        token.forceApprove(gate, 0);
     }
 }

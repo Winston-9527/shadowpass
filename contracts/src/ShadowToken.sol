@@ -7,13 +7,13 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IShadowGate} from "./interfaces/IShadowGate.sol";
 
 /// Six-decimal test stablecoin. `faucetDeposit` is testnet-only: it mints, approves the Gate and deposits a note
-/// for the caller while enforcing a per-address daily faucet limit.
+/// for the caller while enforcing a global daily faucet limit. Per-user limits belong to the facilitator.
 contract ShadowToken is ERC20, Ownable, ReentrancyGuard {
     uint256 public constant DAILY_FAUCET_LIMIT = 100 * 10 ** 6;
 
     address public immutable gate;
-    mapping(address => uint256) public faucetDay;
-    mapping(address => uint256) public faucetClaimed;
+    uint256 public faucetDay;
+    uint256 public faucetClaimed;
 
     error ZeroAddress();
     error ZeroAmount();
@@ -38,20 +38,20 @@ contract ShadowToken is ERC20, Ownable, ReentrancyGuard {
 
     function faucet() external returns (uint256 amount) {
         amount = DAILY_FAUCET_LIMIT;
-        _faucet(msg.sender, amount);
+        _faucet(amount);
         _mint(msg.sender, amount);
         emit Faucet(msg.sender, amount);
     }
 
-    function faucet(uint256 amount) external {
-        _faucet(msg.sender, amount);
+    function faucetAmount(uint256 amount) external {
+        _faucet(amount);
         _mint(msg.sender, amount);
         emit Faucet(msg.sender, amount);
     }
 
-    function remainingFaucet(address account) external view returns (uint256) {
+    function remainingFaucet() external view returns (uint256) {
         uint256 day = block.timestamp / 1 days;
-        uint256 claimed = faucetDay[account] == day ? faucetClaimed[account] : 0;
+        uint256 claimed = faucetDay == day ? faucetClaimed : 0;
         return DAILY_FAUCET_LIMIT - claimed;
     }
 
@@ -59,7 +59,7 @@ contract ShadowToken is ERC20, Ownable, ReentrancyGuard {
         external
         nonReentrant
     {
-        _faucet(msg.sender, q);
+        _faucet(q);
         _mint(address(this), q);
         _approve(address(this), gate, q);
         IShadowGate(gate).deposit(proof, cm, q, memo);
@@ -67,12 +67,12 @@ contract ShadowToken is ERC20, Ownable, ReentrancyGuard {
         emit Faucet(msg.sender, q);
     }
 
-    function _faucet(address account, uint256 amount) private {
+    function _faucet(uint256 amount) private {
         if (amount == 0) revert ZeroAmount();
         uint256 day = block.timestamp / 1 days;
-        uint256 claimed = faucetDay[account] == day ? faucetClaimed[account] : 0;
+        uint256 claimed = faucetDay == day ? faucetClaimed : 0;
         if (claimed + amount > DAILY_FAUCET_LIMIT) revert FaucetLimit();
-        faucetDay[account] = day;
-        faucetClaimed[account] = claimed + amount;
+        faucetDay = day;
+        faucetClaimed = claimed + amount;
     }
 }

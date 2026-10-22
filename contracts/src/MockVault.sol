@@ -7,7 +7,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 interface IMockVaultQuote {
-    function previewDepositAt(uint256 assets, uint256 term) external view returns (uint256 assetsAtMaturity);
+    function previewDepositRedeemAt(uint256 assets, uint256 term) external view returns (uint256 assetsAtMaturity);
 }
 
 /// ERC-4626 vault with deterministic accelerated yield for short demos. Yield must be funded with real tokens
@@ -39,13 +39,16 @@ contract MockVault is ERC4626, IMockVaultQuote {
         return principal + _pendingAccrual();
     }
 
-    function previewDepositAt(uint256 assets, uint256 term) external view returns (uint256 assetsAtMaturity) {
-        uint256 current = totalAssets();
-        uint256 principalAfter = current + assets;
-        if (principalAfter == 0 || term == 0) return assets;
+    function previewDepositRedeemAt(uint256 assets, uint256 term) external view returns (uint256 assetsAtMaturity) {
+        if (assets == 0) return 0;
 
-        uint256 grown = principalAfter + _yield(principalAfter, term);
-        return Math.mulDiv(grown, assets, principalAfter);
+        uint256 currentAssets = totalAssets();
+        uint256 currentSupply = totalSupply();
+        uint256 shares = Math.mulDiv(assets, currentSupply + 1, currentAssets + 1);
+        uint256 futureAssets = currentAssets + assets;
+        uint256 futureSupply = currentSupply + shares;
+        futureAssets += _yield(futureAssets, term);
+        return Math.mulDiv(shares, futureAssets + 1, futureSupply + 1);
     }
 
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
