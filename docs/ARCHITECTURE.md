@@ -67,13 +67,14 @@ flowchart TD
 | `types` | `Deployment`、`Identity`、`ViewKey`、`Cert`、`Note`、`Action`、`Bundle`、`OwnerCiphertext`、`BillEntry` | 全部 |
 | `deployment` | `loadDeployment(network \| json)` | 全部 |
 | `certs` | `issueRoot(...)`、`issue(parent, ...)`、`certHash0`、`certHash` | wallet、mcp |
-| `state` | `class ChainState { static sync(client, deployment, opts) ; update() ; roots() ; issued ; revoked ; roots ; notes ; group }` | wallet、mcp、facilitator |
+| `state` | `class ChainState { static sync(client, deployment, opts) ; update() ; roots() ; issued ; revoked ; rootTree ; notes ; group }` | wallet、mcp、facilitator |
 | `witness` | `actionInput`、`registerInput`、`revokeInput`、`transferInput`、`mintInput` | wallet、mcp |
 | `prove` | `loadArtifacts({ baseUrl \| dir, circuit })`（按 MANIFEST 校验）、`prove(circuit, input, artifacts)`、`verify(...)`、`toCalldata(proof, publicSignals)` | wallet、mcp、facilitator |
-| `ctx` | `ctxHash({ chainId, gate, action })`、`reqHash({ network, asset, amount, payTo, resource })` | mcp、facilitator、x402 |
+| `ctx` | `ctxHash({ chainId, gate, action, memoChange })`、`reqHash({ network, asset, amount, payTo, resource })` | mcp、facilitator、x402 |
+| `notes` | `encodeNoteMemo(note, recipientBoxPk)`、`decodeNoteMemo(memo, boxSk)`、`scanNotes(state, logs, { boxSk, holderSks })` | wallet、mcp |
 | `owner` | `encryptChain`、`openChain(ct, vsk)`、`scanBill(state, logs, vsk) -> BillEntry[]` | wallet |
 | `bundle` | `encodeBundle / decodeBundle`、`encodeMessage / decodeMessage`（receipt、delegated） | wallet、mcp |
-| `mailbox` | `class MailboxClient { send(toPk, msg, from) ; poll(kp, after) }` | wallet、mcp |
+| `mailbox` | `class MailboxClient { send(toPk, msg) ; poll(kp, after) }` | wallet、mcp |
 
 在 #6 交付之前，其他工单可以先写调用方代码，用 mock 实现这些签名。签名有变化时，#6 必须同步更新本表。
 
@@ -81,7 +82,7 @@ flowchart TD
 
 - `circuits/scripts/publish-artifacts.sh`（#2 编写）：把 wasm、zkey、vk、`MANIFEST.sha256` 复制到 `apps/wallet/public/zk/circuits-v<N>/`（不进 git）。
 - 钱包部署后，产物公开在 `https://shadowpass-wallet.vercel.app/zk/circuits-v<N>/`。zkey 不是秘密。
-- MCP、facilitator、浏览器都通过 `SHADOWPASS_ARTIFACTS`（URL 或本地目录）加载。`sdk.prove.loadArtifacts` 校验哈希时，**以 SDK 内置的哈希表为准**（构建时从仓库里提交的 `circuits/zk/MANIFEST.sha256` 生成），不能只信托管方返回的 MANIFEST，否则恶意托管方可以同时替换 zkey、vk 和 MANIFEST。
+- MCP、facilitator、浏览器都通过 `SHADOWPASS_ARTIFACTS`（URL 或本地目录）加载。`sdk.prove.loadArtifacts` 校验 zkey/vk 时，**以 SDK 内置的哈希表为准**（由 `scripts/generate-artifact-hashes.mjs` 从仓库里提交的 `circuits/zk/MANIFEST.sha256` 生成），不能只信托管方返回的 MANIFEST，否则恶意托管方可以同时替换 zkey、vk 和 MANIFEST。
 - 改了电路就升版本号，verifier 同步重新部署。当前版本是 `circuits-v2`（A2）；`.env.example` 的默认值同步改为 v2。
 
 ## 5. 配置

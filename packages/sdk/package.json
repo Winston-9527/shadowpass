@@ -9,7 +9,28 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run",
+    "artifact:hashes": "node scripts/generate-artifact-hashes.mjs",
+    "browser:fixture": "node scripts/make-browser-fixture.mjs",
+    "browser:build": "npm run browser:fixture && vite build --config browser/vite.config.ts",
+    "browser:proof": "node scripts/run-browser-proof.mjs"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@noble/hashes": "1.8.0",
+    "@zk-kit/lean-imt": "2.2.5",
+    "blake-hash": "2.0.0",
+    "buffer": "6.0.3",
+    "circomlibjs": "0.1.7",
+    "ffjavascript": "0.2.63",
+    "libsodium-wrappers": "0.7.15",
+    "poseidon-lite": "0.3.0",
+    "snarkjs": "0.7.6",
+    "viem": "2.57.7",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@shadowpass/circuits": "*",
+    "playwright": "1.64.1",
+    "vite": "8.3.5"
+  }
 }
