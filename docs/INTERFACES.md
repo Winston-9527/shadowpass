@@ -146,14 +146,80 @@ Agent 用 `delegate` 创建子 Agent 时，向主人信箱发送 `{"type": "dele
 
 ## 8. x402 `shadowpass` scheme
 
-- 付款要求（402 里的 `accepts[i]`）：`scheme = "shadowpass"`，`network = "eip155:84532"`，`asset` = 测试代币地址，`amount` = 最小单位，`payTo`，`extra = { gate, payout }`。
-- 付款凭据（`PaymentPayload.payload`）：
+### 8.1 付款要求（402 响应里的 `accepts[i]`）
+
 ```json
-{ "D": 2, "proof": {"a": [], "b": [[], []], "c": []}, "roots": {"issued": "..", "revoked": "..", "root": ".."},
-  "nowTs": "..", "action": {"target": "0x..", "method": "0x..", "amount": "..", "nonce": "..", "params": "0x.."},
-  "ct": ["..."], "budget": {"noteRoot": "..", "budgetNf": "..", "cmChange": "..", "qSpent": ".."}, "memoChange": "0x.." }
+{ "scheme": "shadowpass", "network": "eip155:84532", "asset": "0x<ShadowToken>", "amount": "2000000",
+  "payTo": "0x<商家收款地址>", "maxTimeoutSeconds": 120,
+  "extra": { "gate": "0x<ShadowGate>", "payout": "0x<ShadowPayout>", "method": "0x<bytes4(keccak256(\"shadowpass.PAY\"))>" } }
 ```
-- 流程：`upfront`（先 settle 再交付）。facilitator `/verify` 检查 `payTo`、`amount`、`reqHash`，然后 `eth_call` 模拟 `Gate.execute`；`/settle` 发送交易。参考：`spikes/x402-scheme/`。
+
+`resource.url` 取自 x402 v2 的 `PaymentRequired.resource.url`。
+
+### 8.2 付款凭据（`PaymentPayload.payload`）
+
+所有整数都用十进制字符串，地址和字节用 `0x` 开头的十六进制。
+
+```json
+{ "D": 2,
+  "proof": { "a": ["..",".."], "b": [["..",".."],["..",".."]], "c": ["..",".."] },
+  "roots": { "issued": "..", "revoked": "..", "root": ".." },
+  "nowTs": "1767225600",
+  "action": { "target": "0x<payout>", "method": "0x<PAY>", "amount": "2000000", "nonce": "..", "params": "0x<abi.encode(payTo, reqHash)>" },
+  "ct": ["..."],
+  "budget": { "noteRoot": "..", "budgetNf": "..", "cmChange": "..", "qSpent": "2000000" },
+  "memoChange": "0x.." }
+```
+
+- `proof` 是 Solidity 调用顺序（即 SDK `toCalldata` 的输出，`b` 已交换坐标）。
+- `action.nonce`：248 bit 的随机数。
+- `nowTs`：取最新区块时间，不能用本机时间（Gate 要求 `nowTs <= block.timestamp` 且差值不超过 `clockSkew`）。
+- 字段与 `ShadowGate.execute(Proof, Roots, nowTs, Action, ct, Budget, memoChange)` 一一对应。
+
+### 8.3 facilitator 的检查（`/verify`，`/settle` 之前再检查一次）
+
+依次检查，第一个不通过的检查的错误码作为 `invalidReason` 返回：
+
+| 检查 | `invalidReason` |
+|---|---|
+| `scheme`、`network` 与要求一致；`D ∈ {1,2,3}` 且 `ct.length == D + 6` | `invalid_scheme` / `invalid_payload` |
+| `action.target == extra.payout`，`action.method == extra.method` | `wrong_target` |
+| `action.amount == budget.qSpent == amount`（要求里的金额） | `amount_mismatch` |
+| `params` 解码为 `(payTo, reqHash)`，`payTo` 等于要求里的 `payTo`，`reqHash` 等于按 §5 用 `(network, asset, amount, payTo, resource.url)` 重算的值 | `binding_mismatch` |
+| `nowTs` 不早于最新区块时间减去 `clockSkew` | `stale` |
+| 状态根组合已登记；未登记时，`/settle` 先调用一次 `registerState`（无许可） | `unknown_state` |
+| `eth_call` 模拟 `Gate.execute` 成功；把合约的 revert 名称映射成错误码 | `simulation_failed:<RevertName>` |
+
+`/settle` 用 facilitator 的热钱包发送 `execute`，等待 1 个确认，返回 `transaction`、`network`、`payer = "shadowpass-pool"`。同一个 `budgetNf` 的并发请求只允许一个进入 `/settle`。流程为 `upfront`（先 settle 再交付），参考 `spikes/x402-scheme/`。
+
+### 8.4 `@shadowpass/x402` 包的对外 API（#8 实现，#7 和商家使用）
+
+```ts
+// 证明由调用方生成：x402 包不接触私钥、凭证、票据
+export interface ShadowpassPaymentBuilder {
+  buildPayment(req: PaymentRequirements, resourceUrl: string): Promise<ShadowpassPayload>;
+}
+export const ShadowpassPayloadSchema: z.ZodType<ShadowpassPayload>;     // §8.2 的 zod schema
+export class ShadowpassClientScheme implements SchemeNetworkClient {      // Agent 端（MCP）注册到 x402Client
+  constructor(builder: ShadowpassPaymentBuilder);
+}
+export class ShadowpassServerScheme implements SchemeNetworkServer {      // 商家注册到 x402ResourceServer，paymentFlow = upfront
+  constructor(cfg: { deployment: Deployment; asset: Address; payout: Address; decimals: 6 });
+}
+export class ShadowpassFacilitatorScheme implements SchemeNetworkFacilitator {  // facilitator 服务注册到 x402Facilitator
+  constructor(cfg: { publicClient: PublicClient; walletClient: WalletClient; deployment: Deployment });
+}
+export function checkPayment(payload, req, resourceUrl, chainView): Promise<VerifyResponse>;  // §8.3 的纯检查逻辑，供测试和 facilitator 复用
+```
+
+Agent 端（#7）实现 `ShadowpassPaymentBuilder.buildPayment`，内部全部用 SDK 完成：
+1. 读取本地凭证包和未花票据；按 `amount` 选一张余额足够的票据；
+2. 用 `ctx.reqHash` 算出 `reqHash`，构造 `action`；
+3. 生成找零票据和 `memoChange`（加密给自己的信箱公钥）；
+4. 用 `ctx.ctxHash`（含 `memoChange`）算出 `ctx_hash`，再用 `witness.actionInput`、`prove.prove`、`prove.verify` 生成证明，本地验证通过后再提交；
+5. 用 `prove.toCalldata` 输出 §8.2 的格式。
+
+MCP 的 x402 客户端只允许 `asset = 部署文件里的测试代币`，并设置单笔上限（`spendControls`）。
 
 ## 9. 信箱 API
 
@@ -237,3 +303,25 @@ GET  /slot/:slot?after=n                                                    -> 2
 - 槽 ID 只有持有 passkey 或恢复码的人才算得出来，外人无法定位到槽，也就无法往里灌垃圾数据。信箱运营方能看到槽 ID 和条数，也有能力删掉数据，所以钱包要同时在本地保留信封；“没有配置信箱”时，不能声称“可以换设备恢复”。
 - 写备份失败时，不能显示恢复码，也不能把钱包标记为已创建；要么重试成功，要么整体回滚。
 - 恢复出 seed 之后，按 §11 扫描 `NoteMemo` 找回票据，按 §6 同步链上状态。
+
+## 14. facilitator 的钱包交易代付接口
+
+用户钱包没有 ETH，开通、领币、发卡、吊销这几类交易由 facilitator 代为发送。facilitator **只转发下表中的调用**，参数原样传入合约，自己不做任何授权判断（授权由证明和合约保证）。
+
+```
+POST /relay/:action      body: { "args": { ... } }       -> 200 { "transaction": "0x..", "blockNumber": "..", "logs": [...] }
+```
+
+| `action` | 调用的合约函数 |
+|---|---|
+| `join` | `ShadowGroup.join(commitment)` |
+| `register` | `ShadowRegistry.register(proof, groupRoot, nf, leaf0, siblingNodes)` |
+| `faucetDeposit` | `ShadowToken.faucetDeposit(proof, cm, q, memo)` |
+| `issue` | `ShadowGate.issue(certHash)` |
+| `transferBudget` | `ShadowGate.transferBudget(proof, noteRoot, revokedRoot, nullifier, cm1, cm2, memo1, memo2)` |
+| `revoke` | `ShadowRevocations.revoke(proof, newRoot, entry)` |
+| `registerState` | `ShadowGate.registerState(issued, revoked, root)` |
+
+- 发送前先 `eth_call` 模拟，失败就返回 400 和 revert 名称，不上链。
+- 按 IP 限流（`faucetDeposit` 每 IP 每天 1 次），可信代理头的规则同 §9。
+- 真实入金（§12，从 MetaMask 发出）不经过这里。
