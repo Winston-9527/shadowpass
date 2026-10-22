@@ -50,10 +50,10 @@ Output Directory: dist
 `vercel.json` 里的 `git.deploymentEnabled` 只允许 `main` 触发部署，其他分支 push 不会建 preview、也不会生成 Vercel check：
 
 ```json
-"git": { "deploymentEnabled": { "main": true } }
+"git": { "deploymentEnabled": { "main": true, "**": false } }
 ```
 
-需要给某个分支开预览时，把分支名加进去（值为 `true`），或临时删掉这段。
+> `**` 兜底是必须的：**没列出来的分支默认是 `true`**，只写 `{"main": true}` 等于没关。需要给某个分支开预览时，把它加进去（值为 `true`）。
 
 Vercel 项目里 Git 评论（PR 上的部署链接）也已关闭。剩下的邮件是团队级 `Deployment Failures` 通知，只能本人关：团队切换器 → Settings → Account → **My Notifications**，把 Deployment Failures 的 **Email** 勾掉（Vercel 不允许两个渠道全关，但可以只留 Web）。
 
