@@ -17,6 +17,8 @@
 
 Vercel 项目 → Settings → General → **Root Directory**：留空（仓库根目录）。
 
+> 别设成 `packages/sdk` 之类的子目录 —— 这个项目最初就是 `packages/sdk`，`npm ci` 会按 sdk 的依赖装（157 个包，没有 vite），构建报 `Cannot find package 'vite'`。API 改法：`PATCH https://api.vercel.com/v9/projects/<projectId>?teamId=<teamId>`，body `{"rootDirectory": null}`。
+
 根目录的 `vercel.json` 会覆盖 Dashboard 里的构建设置：
 
 ```
@@ -79,7 +81,7 @@ curl -sI https://shadowpass-wallet.vercel.app | head -1
 
 | 报错 | 原因 | 处理 |
 |---|---|---|
-| `Cannot find package 'vite'` / `[UNRESOLVED_IMPORT] Could not resolve 'vite'` | Vercel 按 production 安装，devDependencies 被跳过 | 把 `vite` 等构建期工具放进 `dependencies`，install command 用 `npm ci` |
+| `Cannot find package 'vite'` / `[UNRESOLVED_IMPORT] Could not resolve 'vite'` | Root Directory 指到了某个子包，`npm ci` 只装了那个包的依赖；或 devDependencies 被 production 安装跳过 | 把 Root Directory 设回仓库根；构建期工具（`vite`）放 `dependencies` |
 | `No Output Directory named 'public' found` | Output Directory 用的是旧默认值 `public` | 按上面 A/B 设置产物目录 |
 | `circom: command not found` | 在仓库根跑了全量 `npm run build` | 只构建 `-w @shadowpass/wallet` |
 | `npm ci` 报 lockfile 不同步 | 改了依赖没提交 `package-lock.json` | 本地 `npm install` 后一起提交 |
