@@ -12,6 +12,9 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@shadowpass/sdk": "*"
+    "@shadowpass/sdk": "*",
+    "@x402/core": "2.28.0",
+    "viem": "2.57.7",
+    "zod": "4.6.7"
   }
 }

@@ -8,10 +8,19 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "start": "vite-node src/main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "e2e": "vite-node scripts/e2e.mjs"
   },
   "dependencies": {
-    "@shadowpass/x402": "*"
+    "@shadowpass/x402": "*",
+    "@x402/core": "2.28.0",
+    "@x402/express": "2.28.0",
+    "@x402/fetch": "2.28.0",
+    "express": "4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.3"
   }
 }
