@@ -15,6 +15,7 @@
 | B1 SDK：五棵树同步、witness、证明、票据备忘、凭证包 | ✅ #6，20/20 单元测试通过；Anvil 集成跳过（依赖 #3/#5）；Chrome D2 真实证明约 1.6 s |
 | A4 应用合约：Payout、TreasuryAdapter、MockVault、ShadowToken | 🚧 #4，Foundry 单元 15/15；真实 Gate 集成待 #24 合并 |
 | A3 核心合约：Gate、Group、Registry、Revocations | ✅ #3，真实证明 30/30；gas 中位数：register 346,668、issue 98,604、deposit 360,961、transferBudget 479,017、execute D2 549,916、revoke 254,361 |
+| A5 部署：Anvil 一键环境 | 🚧 #5，Anvil 实际部署和测试币发放通过；Base Sepolia 待本地 `DEPLOYER_PK` |
 | 工单拆分（#2–#13，总览 #14）、README、`docs/INTERFACES.md`、`AGENTS.md` | ✅ |
 | 域名（passkey RP ID） | ✅ `shadowpass-wallet.vercel.app` |
 | monorepo 骨架、`docs/ARCHITECTURE.md`、CI | ✅ |
