@@ -4,6 +4,7 @@
   "installCommand": "cd ../.. && npm ci",
   "buildCommand": "cd ../.. && npm run build -w @shadowpass/wallet",
   "outputDirectory": "dist",
+  "git": { "deploymentEnabled": { "main": true } },
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
   "headers": [
     {

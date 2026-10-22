@@ -4,6 +4,7 @@
   "installCommand": "npm ci",
   "buildCommand": "npm run build -w @shadowpass/wallet",
   "outputDirectory": "apps/wallet/dist",
+  "git": { "deploymentEnabled": { "main": true } },
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
   "headers": [
     {
