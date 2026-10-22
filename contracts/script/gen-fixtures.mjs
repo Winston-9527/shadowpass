@@ -15,7 +15,10 @@ const fixturesDir = path.join(root, "contracts/test/fixtures");
 const CHAIN_ID = 31337n;
 const GATE = "0x1000000000000000000000000000000000000001";
 const TARGET = "0x2000000000000000000000000000000000000001";
+const TREASURY_ADAPTER = "0x3000000000000000000000000000000000000001";
+const VAULT = "0x4000000000000000000000000000000000000001";
 const METHOD = keccak256(toBytes("shadowpass.PAY")).slice(0, 10);
+const TREASURY_METHOD = keccak256(toBytes("shadowpass.TREASURY_SUPPLY")).slice(0, 10);
 const PARAMS = "0x2a";
 const MEMO = "0x01020304";
 const NOW = 1000n;
@@ -285,10 +288,75 @@ async function d3Scenario() {
   };
 }
 
+async function treasuryScenario() {
+  const x = await makeWorld("fixtures-treasury");
+  const note = x.w.mintNote([x.c0], Q);
+  const term = 180n;
+  const returnCm = 0x1234n;
+  const expectedQ = 1n;
+  const returnMemo = "0xdeadbeef";
+  const params = encodeAbiParameters(
+    [
+      { type: "address" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "uint256" },
+      { type: "bytes" },
+    ],
+    [VAULT, term, returnCm, expectedQ, returnMemo],
+  );
+  const action = {
+    target: TREASURY_ADAPTER,
+    method: TREASURY_METHOD,
+    amount: 10n,
+    nonce: 5n,
+    params,
+  };
+  const memoChange = "0xbeef";
+  const register = await prove("main_reg", x.w.registerInput({ human: x.alice, cert0: x.c0, domain: DOMAIN }));
+  const deposit = await prove("budget_mint", x.w.mintInput(note));
+  const execute = await prove(
+    "main_d1",
+    x.w.actionInput({
+      chain: [x.c0],
+      holderSk: x.steward.sk,
+      note,
+      qSpent: action.amount,
+      ctxHash: ctxHash(action, memoChange),
+      reqCap: 2n,
+      now: NOW,
+    }).input,
+  );
+  return {
+    group: { commitment: x.w.group.leaves[0], root: x.w.group.root },
+    register,
+    issue: x.c1.hash,
+    deposit: { ...deposit, cm: noteCm(note), q: note.q, memo: "0x11111111" },
+    roots: [x.w.issued.root, x.w.revoked.root, x.w.roots.root],
+    revocations: { genesisRoot: x.w.revoked.root, genesisCount: x.w.revoked.leaves.length },
+    execute: {
+      ...execute,
+      now: NOW,
+      action,
+      ct: execute.pub.slice(4, 4 + 7),
+      budget: execute.pub.slice(-4),
+      memoChange,
+    },
+    reqCap: 2n,
+    adapter: TREASURY_ADAPTER,
+    vault: VAULT,
+    term,
+    returnCm,
+    expectedQ,
+    returnMemo,
+  };
+}
+
 const core = await coreScenario();
 const transfer = await transferScenario();
 const d1 = await d1Scenario();
 const d3 = await d3Scenario();
+const treasury = await treasuryScenario();
 fs.mkdirSync(fixturesDir, { recursive: true });
 fs.writeFileSync(
   path.join(fixturesDir, "shadowpass.json"),
@@ -304,6 +372,7 @@ fs.writeFileSync(
     transfer,
     d1,
     d3,
+    treasury,
   }),
 );
 console.log(`wrote ${path.join(fixturesDir, "shadowpass.json")}`);

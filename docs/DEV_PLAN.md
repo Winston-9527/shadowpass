@@ -14,6 +14,7 @@
 | A2 电路：签发树 LeanIMT + 吊销适配 + D3/预算电路 | ✅ #2，44/44 witness、7 电路各 5/5 真实证明且全部公开输入扰动拒绝，见 `circuits/README.md` |
 | B1 SDK：五棵树同步、witness、证明、票据备忘、凭证包 | ✅ #6，20/20 单元测试通过；Anvil 集成跳过（依赖 #3/#5）；Chrome D2 真实证明约 1.6 s |
 | A3 核心合约：Gate、Group、Registry、Revocations | ✅ #3，真实证明 30/30；gas 中位数：register 346,668、issue 98,604、deposit 360,961、transferBudget 479,017、execute D2 549,916、revoke 254,361 |
+| A4 应用合约：Payout、TreasuryAdapter、MockVault、ShadowToken | ✅ #4，Foundry 46/46；真实 Gate `TREASURY_SUPPLY → withdraw → NoteMemo` 集成通过 |
 | 工单拆分（#2–#13，总览 #14）、README、`docs/INTERFACES.md`、`AGENTS.md` | ✅ |
 | 域名（passkey RP ID） | ✅ `shadowpass-wallet.vercel.app` |
 | monorepo 骨架、`docs/ARCHITECTURE.md`、CI | ✅ |
