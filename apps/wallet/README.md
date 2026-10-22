@@ -21,21 +21,19 @@ Vercel 项目 Root Directory 设为 `apps/wallet`，仓库内 `vercel.json` 会�
 
 ## 密钥与存储
 
-- Passkey PRF 输出为 32 字节。
-- seed 用 PRF 派生的 AES-256-GCM key 包裹，包裹记录和查看钥存 IndexedDB。
-- 签名钥、管家钥、信箱钥只在内存中；锁定时显式清零。
-- 恢复码是自包含的 `SP1-` 令牌，包含 scrypt 保护的 seed 密文，不依赖旧浏览器 IndexedDB。
-- 第二个 passkey 会在同一 seed 上增加一份包裹。
+- Passkey PRF 输出为 32 字节；登录时只读取 `prf.results.first`，注册时才检查 `prf.enabled`。
+- 信封、恢复码、HKDF 和 seed 派生全部调用 `@shadowpass/sdk` 的 `keys` 模块。
+- IndexedDB 只保存 passkey metadata、SDK `SPW1` 信封和查看钥；PRF、seed、签名钥、管家钥不落盘。
+- 恢复码为 20 位 Crockford Base32，mode 1 信封写入 §13 恢复槽；passkey 信封写入 credential-id 槽。
+- 第二个 passkey 使用新的随机 user handle，并通过 `excludeCredentials` 排除已有凭证。
 
-### SDK #6 临时适配
-
-`@shadowpass/sdk` 的 `keys` 模块尚未交付，本 PR 在 `src/wallet/keys.ts` 保留 SDK 适配入口，并用明确标注的 provisional keys 让 #10 的 UI 和 passkey 流程可独立测试。设置：
+设置信箱服务：
 
 ```bash
-VITE_ALLOW_PROVISIONAL_KEYS=true
+VITE_MAILBOX_URL=http://localhost:8787
 ```
 
-`#6` 合并后应优先调用其 `deriveKeys(seed)`；当前 provisional 输出不能用于后续链上凭证。
+未配置时使用内存槽，只用于本地 UI 开发，不能完成跨浏览器恢复。
 
 ## 验证
 
@@ -46,7 +44,7 @@ npm run build -w @shadowpass/wallet
 npm run e2e -w @shadowpass/wallet
 ```
 
-`e2e` 使用本机 Chrome 和一个注入的 PRF 测试替身，覆盖创建、同一 passkey 解锁、第二 passkey、自包含恢复码和 PRF 不可用状态。截图写入 `apps/wallet/e2e-output/`，不提交 git。
+`e2e` 使用本机 Chrome 和一个符合规范字段的 PRF 测试替身，覆盖创建、同一 passkey 解锁、第二 passkey、恢复槽和 PRF 不可用状态。截图写入 `apps/wallet/e2e-output/`，不提交 git。
 
 真实 Touch ID 仍需人工验收：
 

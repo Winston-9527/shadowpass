@@ -14,7 +14,7 @@ describe("wallet IndexedDB", () => {
       kind: "passkey",
       credentialId: "credential-1",
       createdAt: "2026-10-21T00:00:00.000Z",
-      wrapped: { v: 1, iv: "iv", ciphertext: "ct" },
+      wrapped: Uint8Array.from([1, 2, 3]),
     });
     await saveViewSecret(Uint8Array.from([1, 2, 3]));
 

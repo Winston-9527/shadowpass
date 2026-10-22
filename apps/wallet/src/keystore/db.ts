@@ -1,11 +1,10 @@
-import type { WrappedSeed } from "./crypto";
 import type { PasskeyRecord } from "../passkey/webauthn";
 
 export interface WrapperRecord {
   id: string;
   kind: "passkey" | "recovery";
   credentialId?: string;
-  wrapped: WrappedSeed;
+  wrapped: Uint8Array;
   createdAt: string;
 }
 
@@ -90,4 +89,19 @@ export async function resetWalletDbForTests(): Promise<void> {
     deletion.onerror = () => reject(deletion.error ?? new Error("Unable to reset IndexedDB"));
     deletion.onblocked = () => resolve();
   });
+}
+
+export async function inspectWalletDbForTests(): Promise<Record<string, unknown>[]> {
+  const db = await openWalletDb();
+  try {
+    const transaction = db.transaction([PASSKEYS, WRAPPERS, SECRETS], "readonly");
+    const stores = [PASSKEYS, WRAPPERS, SECRETS];
+    const records: Record<string, unknown>[] = [];
+    for (const storeName of stores) {
+      records.push(...await request(transaction.objectStore(storeName).getAll()) as Record<string, unknown>[]);
+    }
+    return records;
+  } finally {
+    db.close();
+  }
 }

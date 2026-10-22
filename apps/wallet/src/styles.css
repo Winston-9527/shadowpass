@@ -112,6 +112,7 @@ code { font-family: "SFMono-Regular", "Cascadia Code", monospace; font-size: 12p
 .empty-row { justify-content: center; color: #748086; font-size: 13px; }
 
 .recovery-section { margin-top: 24px; padding-top: 22px; border-top: 1px solid #e1e6e8; }
+.synced-button { margin-top: 14px; }
 .inline-error, .inline-warning, .notice {
   display: flex; align-items: flex-start; gap: 10px; border-radius: 8px; padding: 13px 14px; font-size: 14px;
 }

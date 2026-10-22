@@ -18,8 +18,8 @@ import {
 import { shortFingerprint } from "./lib/bytes";
 import { listPasskeys } from "./keystore/db";
 import { hasPlatformPasskeySupport, isPlatformAuthenticatorAvailable, PrfUnsupportedError, type PasskeyRecord } from "./passkey/webauthn";
-import { addPasskey, createWallet, lockSession, recoverWallet, unlockWallet, type WalletSession } from "./wallet/session";
-import type { WalletKeyMaterial } from "./wallet/keys";
+import { addPasskey, createWallet, lockSession, recoverWallet, unlockWallet, unlockWithSyncedPasskey, type WalletSession } from "./wallet/session";
+import { publicKeyText, type WalletKeyKind } from "./wallet/keys";
 
 type SupportState =
   | { status: "checking" }
@@ -41,13 +41,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The operation could not be completed";
 }
 
-function KeyRow({ label, material, storage }: { label: string; material: WalletKeyMaterial; storage: string }) {
+function KeyRow({ label, publicKey, storage }: { label: string; publicKey: string; storage: string }) {
   return (
     <article className="key-row">
       <div className="key-icon"><KeyRound size={18} /></div>
       <div className="key-copy">
         <div className="key-title">{label}</div>
-        <code title={material.publicKey}>{shortFingerprint(material.publicKey)}</code>
+        <code title={publicKey}>{shortFingerprint(publicKey)}</code>
       </div>
       <span className="storage-pill">{storage}</span>
     </article>
@@ -93,10 +93,10 @@ export function App() {
   const sessionRef = useRef<WalletSession | null>(null);
 
   const keyRows = useMemo(() => session ? [
-    { label: "Signing key", material: session.bundle.sign, storage: "memory" },
-    { label: "Steward key", material: session.bundle.steward, storage: "memory" },
-    { label: "View key", material: session.bundle.view, storage: "IndexedDB" },
-    { label: "Mailbox key", material: session.bundle.box, storage: "memory" },
+    { label: "Signing key", kind: "sign" as WalletKeyKind, storage: "memory" },
+    { label: "Steward key", kind: "steward" as WalletKeyKind, storage: "memory" },
+    { label: "View key", kind: "view" as WalletKeyKind, storage: "IndexedDB" },
+    { label: "Mailbox key", kind: "box" as WalletKeyKind, storage: "memory" },
   ] : [], [session]);
 
   const refreshPasskeys = async () => setPasskeys(await listPasskeys());
@@ -158,6 +158,12 @@ export function App() {
     setRecoveryInput("");
   });
 
+  const handleSyncedUnlock = () => run("synced-unlock", async () => {
+    const unlocked = await unlockWithSyncedPasskey();
+    sessionRef.current = unlocked;
+    setSession(unlocked);
+  });
+
   const handleAddPasskey = () => run("add-passkey", async () => {
     if (!session) return;
     await addPasskey(session, passkeyLabel.trim() || "Second passkey");
@@ -216,7 +222,7 @@ export function App() {
               <div className="status-actions">
                 <span className={`source-badge ${session.source}`}>
                   <Database size={14} />
-                  {session.source === "sdk" ? "SDK keys" : "Provisional keys"}
+                  SDK keys
                 </span>
                 <button className="button secondary" onClick={handleAddPasskey} disabled={busy !== null}>
                   {busy === "add-passkey" ? <LoaderCircle className="spin" size={17} /> : <Plus size={17} />}
@@ -229,10 +235,10 @@ export function App() {
               </div>
             </section>
 
-            {session.source === "provisional" && (
+            {session.backupMode === "local" && (
               <section className="inline-warning">
                 <AlertTriangle size={18} />
-                <span>SDK #6 is not merged; key derivation is provisional for wallet-shell testing.</span>
+                <span>VITE_MAILBOX_URL is not configured; recovery slots stay in this browser.</span>
               </section>
             )}
 
@@ -245,7 +251,9 @@ export function App() {
                 <span className="active-passkey"><UserRoundCheck size={15} /> {session.activePasskeyId.slice(0, 12)}</span>
               </div>
               <div className="keys-grid">
-                {keyRows.map((row) => <KeyRow key={row.label} {...row} />)}
+                {keyRows.map((row) => (
+                  <KeyRow key={row.label} label={row.label} storage={row.storage} publicKey={publicKeyText(session.bundle, row.kind)} />
+                ))}
               </div>
             </section>
           </>
@@ -290,6 +298,10 @@ export function App() {
                   </button>
                 ))}
               </div>
+              <button className="button secondary wide synced-button" onClick={handleSyncedUnlock} disabled={busy !== null}>
+                {busy === "synced-unlock" ? <LoaderCircle className="spin" size={17} /> : <Fingerprint size={17} />}
+                Use synced passkey
+              </button>
 
               <div className="recovery-section">
                 <label className="field">
@@ -298,7 +310,7 @@ export function App() {
                     data-testid="recovery-input"
                     value={recoveryInput}
                     onChange={(event) => setRecoveryInput(event.target.value)}
-                    placeholder="XXXX-XXXX-…"
+                    placeholder="XXXX-XXXX-XXXX-XXXX-XXXX"
                     spellCheck={false}
                   />
                 </label>
