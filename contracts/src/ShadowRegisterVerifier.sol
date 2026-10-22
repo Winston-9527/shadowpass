@@ -22,50 +22,53 @@ pragma solidity >=0.7.0 <0.9.0;
 
 contract ShadowRegisterVerifier {
     // Scalar field size
-    uint256 constant r    = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
+    uint256 constant r = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
     // Base field size
-    uint256 constant q   = 21888242871839275222246405745257275088696311157297823662689037894645226208583;
+    uint256 constant q = 21888242871839275222246405745257275088696311157297823662689037894645226208583;
 
     // Verification Key data
-    uint256 constant alphax  = 20491192805390485299153009773594534940189261866228447918068658471970481763042;
-    uint256 constant alphay  = 9383485363053290200918347156157836566562967994039712273449902621266178545958;
-    uint256 constant betax1  = 4252822878758300859123897981450591353533073413197771768651442665752259397132;
-    uint256 constant betax2  = 6375614351688725206403948262868962793625744043794305715222011528459656738731;
-    uint256 constant betay1  = 21847035105528745403288232691147584728191162732299865338377159692350059136679;
-    uint256 constant betay2  = 10505242626370262277552901082094356697409835680220590971873171140371331206856;
+    uint256 constant alphax = 20491192805390485299153009773594534940189261866228447918068658471970481763042;
+    uint256 constant alphay = 9383485363053290200918347156157836566562967994039712273449902621266178545958;
+    uint256 constant betax1 = 4252822878758300859123897981450591353533073413197771768651442665752259397132;
+    uint256 constant betax2 = 6375614351688725206403948262868962793625744043794305715222011528459656738731;
+    uint256 constant betay1 = 21847035105528745403288232691147584728191162732299865338377159692350059136679;
+    uint256 constant betay2 = 10505242626370262277552901082094356697409835680220590971873171140371331206856;
     uint256 constant gammax1 = 11559732032986387107991004021392285783925812861821192530917403151452391805634;
     uint256 constant gammax2 = 10857046999023057135944570762232829481370756359578518086990519993285655852781;
     uint256 constant gammay1 = 4082367875863433681332203403145435568316851327593401208105741076214120093531;
     uint256 constant gammay2 = 8495653923123431417604973247489272438418190587263600148770280649306958101930;
-    uint256 constant deltax1 = 20463854303466742534611349001481731488172315154133070325221232233914991728873;
-    uint256 constant deltax2 = 5301937829471336342695478927298336850385571412503421667492321960033249062;
-    uint256 constant deltay1 = 7715063281261693159351680972183820154805121055216375525469576122668321545789;
-    uint256 constant deltay2 = 4287772893325244696919371901902725518153698442226248177989549407963531088312;
+    uint256 constant deltax1 = 3126129973371931008251361122217767599233470150669344639751608235192401174493;
+    uint256 constant deltax2 = 6863708790846796830982960731718990403575611203286113144958207584249951246236;
+    uint256 constant deltay1 = 2201581881071488768710851442705607459037620332157438331947794161655496551783;
+    uint256 constant deltay2 = 7005680650915773709529779022277286649047257476281436844936901674396096821627;
 
-    
     uint256 constant IC0x = 2433861448358423857602235474946535657880514952633893299367764804235066646127;
     uint256 constant IC0y = 5987314703011096748238841285594915036677253609464185731376593745050320089181;
-    
+
     uint256 constant IC1x = 17720058415064085435765040268187293734570723666415551338730811605037116394300;
     uint256 constant IC1y = 9593634766605881487012035706211069949010526832223424235397066633616117877648;
-    
+
     uint256 constant IC2x = 19452129451209562225427813318380078658000470282421532663688392260791285921693;
     uint256 constant IC2y = 6431458683663495604874137182021662716477636704366962734037197427110386471188;
-    
+
     uint256 constant IC3x = 14653091476873632709490979425066883890850124593496147050430201593834764580432;
     uint256 constant IC3y = 2579816381060725043927696420735383831919848760295257629587373908012696883875;
-    
+
     uint256 constant IC4x = 8171844797059540958338192157645184548951177131484026840201591146191340465450;
     uint256 constant IC4y = 18023523395615721273549953549795466027248255734309563554973879703444602077942;
-    
- 
+
     // Memory data
     uint16 constant pVk = 0;
     uint16 constant pPairing = 128;
 
     uint16 constant pLastMem = 896;
 
-    function verifyProof(uint[2] calldata _pA, uint[2][2] calldata _pB, uint[2] calldata _pC, uint[4] calldata _pubSignals) public view returns (bool) {
+    function verifyProof(
+        uint256[2] calldata _pA,
+        uint256[2][2] calldata _pB,
+        uint256[2] calldata _pC,
+        uint256[4] calldata _pubSignals
+    ) public view returns (bool) {
         assembly {
             function checkField(v) {
                 if iszero(lt(v, r)) {
@@ -73,7 +76,7 @@ contract ShadowRegisterVerifier {
                     return(0, 0x20)
                 }
             }
-            
+
             // G1 function to multiply a G1 value(x,y) to value in an address
             function g1_mulAccC(pR, x, y, s) {
                 let success
@@ -108,15 +111,14 @@ contract ShadowRegisterVerifier {
                 mstore(add(_pVk, 32), IC0y)
 
                 // Compute the linear combination vk_x
-                
+
                 g1_mulAccC(_pVk, IC1x, IC1y, calldataload(add(pubSignals, 0)))
-                
+
                 g1_mulAccC(_pVk, IC2x, IC2y, calldataload(add(pubSignals, 32)))
-                
+
                 g1_mulAccC(_pVk, IC3x, IC3y, calldataload(add(pubSignals, 64)))
-                
+
                 g1_mulAccC(_pVk, IC4x, IC4y, calldataload(add(pubSignals, 96)))
-                
 
                 // -A
                 mstore(_pPairing, calldataload(pA))
@@ -142,7 +144,6 @@ contract ShadowRegisterVerifier {
                 mstore(add(_pPairing, 384), mload(add(pMem, pVk)))
                 mstore(add(_pPairing, 416), mload(add(pMem, add(pVk, 32))))
 
-
                 // gamma2
                 mstore(add(_pPairing, 448), gammax1)
                 mstore(add(_pPairing, 480), gammax2)
@@ -159,7 +160,6 @@ contract ShadowRegisterVerifier {
                 mstore(add(_pPairing, 704), deltay1)
                 mstore(add(_pPairing, 736), deltay2)
 
-
                 let success := staticcall(sub(gas(), 2000), 8, _pPairing, 768, _pPairing, 0x20)
 
                 isOk := and(success, mload(_pPairing))
@@ -169,21 +169,20 @@ contract ShadowRegisterVerifier {
             mstore(0x40, add(pMem, pLastMem))
 
             // Validate that all evaluations ∈ F
-            
+
             checkField(calldataload(add(_pubSignals, 0)))
-            
+
             checkField(calldataload(add(_pubSignals, 32)))
-            
+
             checkField(calldataload(add(_pubSignals, 64)))
-            
+
             checkField(calldataload(add(_pubSignals, 96)))
-            
 
             // Validate all evaluations
             let isValid := checkPairing(_pA, _pB, _pC, _pubSignals, pMem)
 
             mstore(0, isValid)
-             return(0, 0x20)
-         }
-     }
- }
+            return(0, 0x20)
+        }
+    }
+}

@@ -8,5 +8,9 @@
     "test": "forge test",
     "fixtures": "node script/gen-fixtures.mjs"
   },
-  "devDependencies": { "@shadowpass/circuits": "*" }
+  "devDependencies": {
+    "@shadowpass/circuits": "*",
+    "snarkjs": "0.7.6",
+    "viem": "2.57.8"
+  }
 }
