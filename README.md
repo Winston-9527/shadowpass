@@ -81,6 +81,7 @@ flowchart LR
 - [开发计划与状态](docs/DEV_PLAN.md)
 - [代码架构](docs/ARCHITECTURE.md)：monorepo 结构、依赖方向、SDK API、产物分发、CI
 - [共享接口规范](docs/INTERFACES.md)：所有工单共同的约定
+- [部署](docs/DEPLOY.md)：Vercel 项目配置、证明产物托管、常见报错
 - [开发 Agent 工作约定](AGENTS.md)
 - 工作拆分：见 Issues，总览在 tracking issue
 
