@@ -128,7 +128,7 @@ contract ApplicationsTest is Test {
         token.mint(address(vault), 100_000 * 10 ** 6);
     }
 
-    function test_payout_pays_once() public {
+    function test_payout_allows_repeated_request_hash() public {
         address merchant = address(0xBEEF);
         bytes32 reqHash = keccak256("report-1");
         uint256 amount = 10 * 10 ** 6;
@@ -139,14 +139,15 @@ contract ApplicationsTest is Test {
         gate.executeTarget(address(payout), MethodIds.PAY, amount, params);
 
         assertEq(token.balanceOf(merchant), amount);
-        assertTrue(payout.paid(keccak256(abi.encode(merchant, reqHash))));
 
         address otherMerchant = address(0xCAFE);
         gate.executeTarget(address(payout), MethodIds.PAY, amount, abi.encode(otherMerchant, reqHash));
         assertEq(token.balanceOf(otherMerchant), amount);
 
-        vm.expectRevert(ShadowPayout.RequestAlreadyPaid.selector);
+        vm.expectEmit(true, true, false, true, address(payout));
+        emit ShadowPayout.Paid(reqHash, merchant, amount);
         gate.executeTarget(address(payout), MethodIds.PAY, amount, params);
+        assertEq(token.balanceOf(merchant), amount * 2);
     }
 
     function test_payout_only_gate() public {
