@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "npm ci",
-  "buildCommand": "node scripts/debug-vercel.mjs && npm run build -w @shadowpass/wallet",
+  "buildCommand": "npm run build -w @shadowpass/wallet",
   "outputDirectory": "apps/wallet/dist",
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
   "headers": [
