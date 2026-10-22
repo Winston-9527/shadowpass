@@ -20,10 +20,12 @@ Vercel 项目 → Settings → General → **Root Directory**：留空（仓库�
 根目录的 `vercel.json` 会覆盖 Dashboard 里的构建设置：
 
 ```
-Install Command:  npm ci
+Install Command:  npm ci --include=dev
 Build Command:    npm run build -w @shadowpass/wallet
 Output Directory: apps/wallet/dist
 ```
+
+> Vercel 构建时 `NODE_ENV=production`，直接 `npm ci` 会跳过 devDependencies，而 `vite` 就在 devDependencies 里 —— 必须带 `--include=dev`，否则报 `Cannot find package 'vite'`。
 
 ### B. Root Directory 设为 `apps/wallet`
 
@@ -32,7 +34,7 @@ Vercel 项目 → Settings → General → **Root Directory**：`apps/wallet`。
 此时 `apps/wallet/vercel.json` 生效，它先 `cd ../..` 回到仓库根再安装和构建（workspace 依赖 `@shadowpass/sdk` 只在 monorepo 里存在，不能在子目录单独安装）：
 
 ```
-Install Command:  cd ../.. && npm ci
+Install Command:  cd ../.. && npm ci --include=dev
 Build Command:    cd ../.. && npm run build -w @shadowpass/wallet
 Output Directory: dist
 ```
@@ -77,6 +79,7 @@ curl -sI https://shadowpass-wallet.vercel.app | head -1
 
 | 报错 | 原因 | 处理 |
 |---|---|---|
+| `Cannot find package 'vite'` / `[UNRESOLVED_IMPORT] Could not resolve 'vite'` | Vercel 构建时 `NODE_ENV=production`，`npm ci` 跳过了 devDependencies | install command 改成 `npm ci --include=dev` |
 | `No Output Directory named 'public' found` | Output Directory 用的是旧默认值 `public` | 按上面 A/B 设置产物目录 |
 | `circom: command not found` | 在仓库根跑了全量 `npm run build` | 只构建 `-w @shadowpass/wallet` |
 | `npm ci` 报 lockfile 不同步 | 改了依赖没提交 `package-lock.json` | 本地 `npm install` 后一起提交 |
