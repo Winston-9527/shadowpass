@@ -6,7 +6,8 @@ allow_paths = ["../node_modules"]
 remappings = [
   "forge-std/=lib/forge-std/src/",
   "zk-kit-lean-imt/=lib/zk-kit-lean-imt/",
-  "poseidon-solidity/=lib/poseidon-solidity/"
+  "poseidon-solidity/=lib/poseidon-solidity/",
+  "@openzeppelin/contracts/=../node_modules/@openzeppelin/contracts/"
 ]
 solc_version = "0.8.28"
 evm_version = "cancun"
