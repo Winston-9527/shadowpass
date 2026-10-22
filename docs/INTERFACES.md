@@ -83,6 +83,7 @@ ctx_hash = uint256(keccak256(abi.encode(block.chainid, address(gate), act.method
 - `memoChange` 是必填参数（没有找零备忘时传空字节 `0x`，并且调用方必须显式传入）。
 - 电路把 `ctx_hash` 当作不透明的公开输入，所以在哈希里加入 `keccak256(memoChange)` 不需要改电路，却能防止转发方（facilitator）替换找零票据的备忘。
 - `amount` 必须等于 `q_spent`。管理员用 `setMethod(method, cap, target, enabled)` 配置：`requiredCap[method]` 作为 `act_req_cap` 公开输入，**`act.target` 必须等于为该方法登记的 `target`**（PAY → `ShadowPayout`，TREASURY_SUPPLY → `TreasuryAdapter`）。否则持有 TREASURY 能力的 Agent 可以把 target 指向自己的合约，直接把资金转走。
+- 管理员信任边界：管理员可以改变方法的能力位和登记目标，并发出 `MethodSet`；已经生成的证明通过 `ctx_hash` 绑定旧目标，不会因管理员换目标而被解释成新目标。
 - 方法：`PAY = bytes4(keccak256("shadowpass.PAY"))` 要求能力 `PAY`；`TREASURY_SUPPLY = bytes4(keccak256("shadowpass.TREASURY_SUPPLY"))` 要求能力 `TREASURY`。
 - 付款：`target = ShadowPayout`，`params = abi.encode(payTo, reqHash)`，`ShadowPayout` 按 `keccak256(abi.encode(payTo, reqHash))` 防重放（只按 `reqHash` 会被别人抢先占用），`reqHash = keccak256(abi.encode(string network, address asset, uint256 amount, address payTo, string resourceUrl))`（`network` 是 CAIP-2 字符串，如 `"eip155:84532"`）。
 - 理财存入（定期存款语义）：`method = TREASURY_SUPPLY`，`target = TreasuryAdapter`，`params = abi.encode(vault, term, returnCm, expectedQ, returnMemo)`。存入时，adapter 必须校验 `returnCm < P`、`returnMemo` 不超过 512 字节、`expectedQ < 2^64`，否则拒绝（不然取回时会永远失败，本金被锁死）。`quote()` 必须是保守估计：模拟 deposit 再 redeem 的取整损失，并至少再减 2 wei。到期后任何人可调用 `TreasuryAdapter.withdraw(positionId)`，赎回并以 `returnCm`（面额 `expectedQ`，由理财 Agent 在存入时承诺）存回资金池，同时发出 `returnMemo`；多出的部分进储备；不足部分如果不超过储备余额，就从储备补足，照常铸票据；超过储备余额时才报 `Shortfall`，不铸票据，资金留在储备里。

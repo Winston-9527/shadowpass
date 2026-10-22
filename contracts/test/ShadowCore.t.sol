@@ -303,6 +303,13 @@ contract ShadowCoreTest is Test {
         return false;
     }
 
+    function _hasTopic(Vm.Log[] memory logs, bytes32 topic) internal pure returns (bool) {
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics[0] == topic) return true;
+        }
+        return false;
+    }
+
     function _median(uint256[] memory values) internal pure returns (uint256) {
         for (uint256 i = 1; i < values.length; i++) {
             uint256 current = values[i];
@@ -353,7 +360,11 @@ contract ShadowCoreTest is Test {
 
         ShadowGate.Proof memory secondProof = _proof(".core.register2");
         uint256[] memory secondPub = fx.readUintArray(".core.register2.pub");
+        vm.recordLogs();
         _registerCoreParsed(secondProof, secondPub);
+        assertTrue(
+            _hasEvent(vm.getRecordedLogs(), keccak256("Replaced(uint256,uint256,uint256,uint256,uint256)"), firstPub[2])
+        );
         assertEq(registry.currentRoot(), secondPub[3]);
 
         vm.expectRevert(ShadowRegistry.AlreadyRegistered.selector);
@@ -459,24 +470,52 @@ contract ShadowCoreTest is Test {
 
     function test_method_target_binding_rejects_wrong_target() public {
         _prepareExecute();
+        vm.recordLogs();
         vm.prank(ADMIN);
         gate.setMethod(bytes4(fx.readBytes(".method")), uint32(fx.readUint(".reqCap")), address(0xCAFE), true);
+        assertTrue(_hasTopic(vm.getRecordedLogs(), keccak256("MethodSet(bytes4,uint32,address,bool)")));
         vm.expectRevert(ShadowGate.TargetMismatch.selector);
         _executeCore();
     }
 
     function test_append_only_trees_accept_historical_roots() public {
-        _prepareExecute();
-        address adapter = address(0xADAD);
+        _registerCoreParsed(_proof(".core.register"), fx.readUintArray(".core.register.pub"));
+        uint256 oldRegistryRoot = registry.currentRoot();
+        _registerCoreParsed(_proof(".core.register2"), fx.readUintArray(".core.register2.pub"));
+
+        gate.issue(11);
+        uint256 oldIssuedRoot = gate.issuedRoot();
+        gate.issue(22);
+
+        _depositCore();
+        uint256 oldNoteRoot = gate.noteRoot();
+        _depositCore2();
+
+        group.join(111);
+        uint256 oldGroupRoot = group.currentRoot();
+        group.join(222);
+        group.join(333);
+
+        uint256 oldRevokedRoot = revocations.root();
+        _revokeC1();
+
+        vm.warp(fx.readUint(".now") + 1_000_000);
+        assertTrue(gate.issuedRootAccepted(oldIssuedRoot));
+        assertTrue(gate.noteRootAccepted(oldNoteRoot));
+        assertTrue(group.rootAccepted(oldGroupRoot));
+        assertFalse(registry.rootAccepted(oldRegistryRoot));
+        assertFalse(revocations.rootAccepted(oldRevokedRoot));
+    }
+
+    function test_treasury_supply_wrong_target_rejected() public {
+        bytes4 treasurySupply = bytes4(keccak256("shadowpass.TREASURY_SUPPLY"));
         vm.prank(ADMIN);
-        gate.setAdapter(adapter, true);
-        token.mint(adapter, 10);
-        vm.prank(adapter);
-        token.approve(address(gate), 10);
-        vm.prank(adapter);
-        gate.depositFromAdapter(999, 1, hex"");
-        gate.issue(123456789);
-        _executeCore();
+        gate.setMethod(treasurySupply, 2, address(target), true);
+        ShadowGate.Action memory action = _action();
+        action.method = treasurySupply;
+        action.target = address(0xBAD);
+        vm.expectRevert(ShadowGate.TargetMismatch.selector);
+        _execute(action, _roots(), _budget(), fx.readBytes(".core.execute.memoChange"));
     }
 
     function test_nullifier_replay_rejected() public {

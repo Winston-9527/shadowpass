@@ -87,6 +87,7 @@ contract ShadowGate {
     event NoteMemo(uint256 indexed cm, bytes memo);
     event StateRegistered(uint256 issued, uint256 revoked, uint256 root, uint256 stateRoot);
     event AdapterSet(address indexed adapter, bool allowed);
+    event MethodSet(bytes4 indexed method, uint32 cap, address indexed target, bool enabled);
 
     struct Proof {
         uint256[2] a;
@@ -159,6 +160,7 @@ contract ShadowGate {
         requiredCap[method] = cap;
         methodTarget[method] = target;
         methodEnabled[method] = enabled;
+        emit MethodSet(method, cap, target, enabled);
     }
 
     function setAdapter(address adapter, bool allowed) external {
