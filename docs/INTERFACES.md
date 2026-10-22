@@ -31,15 +31,24 @@ vpk = vsk * Base8 = 8 * own_w，own_w = vsk * Generator
 
 ## 3. 密钥派生（用户侧）
 
+规范实现是 `@shadowpass/sdk` 的 `keys` 模块，钱包和 MCP 只调用它，不自行实现。
+
 ```
-seed      = 32 字节随机数，开通时生成一次
-wrap_i    = AES-256-GCM(key = HKDF-SHA256(PRF(passkey_i, salt="shadowpass-v1"), info="wrap"), seed)
-recovery  = AES-256-GCM(key = scrypt(恢复码), seed)
-sign_prv  = HKDF-SHA256(seed, info="shadowpass/sign", 32 字节)   -> identity(sign_prv)（world.mjs 的推导）
-vsk       = HKDF-SHA256(seed, info="shadowpass/view", 64 字节) mod L，为 0 时换 info 后缀重试
-box_sk    = HKDF-SHA256(seed, info="shadowpass/box", 32 字节)    -> X25519 信箱私钥
-steward_prv = HKDF-SHA256(seed, info="shadowpass/steward", 32 字节) -> identity(steward_prv)，管家分配钥（ent1）
+seed        = 32 字节 CSPRNG，开通时生成一次
+prf_i       = WebAuthn PRF 输出：extensions.prf.eval.first = UTF-8("shadowpass-v1")
+              （注册时看 prf.enabled；登录时只看 prf.results.first，登录结果里没有 enabled）
+wrap_key_i  = HKDF-SHA256(ikm = prf_i, salt = UTF-8("shadowpass-v1"), info = "wrap", 32 字节)
+recov_key   = scrypt(password = UTF-8(规范化恢复码), salt = 16 字节随机, N = 2^15, r = 8, p = 1, dkLen = 32)
+信封         = "SPW1"(4) || mode(1：0 = passkey，1 = 恢复码) || iv(12) || salt(16；mode 0 填 0) || AES-256-GCM 密文含 tag(48)
+sign_prv    = HKDF-SHA256(seed, salt = 空, info = "shadowpass/sign", 32 字节)     -> identity(sign_prv)
+steward_prv = HKDF-SHA256(seed, salt = 空, info = "shadowpass/steward", 32 字节)  -> identity(steward_prv)，管家分配钥（ent1）
+vsk         = HKDF-SHA256(seed, salt = 空, info = "shadowpass/view", 64 字节) mod L；为 0 时改用 info "shadowpass/view-retry"
+box_sk      = HKDF-SHA256(seed, salt = 空, info = "shadowpass/box", 32 字节)      -> X25519 私钥，box_pk = crypto_scalarmult_base(box_sk)
 ```
+
+- **恢复码**：20 个 Crockford Base32 字符（100 bit 熵），显示为 `XXXX-XXXX-XXXX-XXXX-XXXX`。规范化：去掉 `-` 和空格，转大写，`I`/`L` → `1`，`O` → `0`。
+- **PRF 输出、seed、签名钥、管家钥永不落盘**。本地 IndexedDB 只存信封、凭证 ID、公钥和查看钥。
+- 每个 passkey 用**新的随机用户句柄**注册，并在 `excludeCredentials` 里列出已有凭证，避免覆盖。
 
 委托树固定为：`ent0 = Alice 身份` →（cert0，Poseidon9）→ `ent1 = 管家分配钥`（也在 Alice 钱包里）→（cert1）→ `ent2 = Agent`。Agent 的证明是 D=2；Agent 再向下委托是 D=3（需要时再编译 `main_d3`）。入金直接铸给管家：`owner = ent1, lin = [cert0, 0, 0, 0]`。
 
@@ -71,25 +80,36 @@ struct Action { address target; bytes4 method; uint256 amount; uint256 nonce; by
 ctx_hash = uint256(keccak256(abi.encode(block.chainid, address(gate), act.method, act.target, act.params, act.amount, act.nonce, keccak256(memoChange)))) >> 8;
 ```
 
+- `memoChange` 是必填参数（没有找零备忘时传空字节 `0x`，并且调用方必须显式传入）。
 - 电路把 `ctx_hash` 当作不透明的公开输入，所以在哈希里加入 `keccak256(memoChange)` 不需要改电路，却能防止转发方（facilitator）替换找零票据的备忘。
 - `amount` 必须等于 `q_spent`。`requiredCap[method]` 由 Gate 管理员通过 `setMethod` 配置，作为 `act_req_cap` 公开输入。
 - 方法：`PAY = bytes4(keccak256("shadowpass.PAY"))` 要求能力 `PAY`；`TREASURY_SUPPLY = bytes4(keccak256("shadowpass.TREASURY_SUPPLY"))` 要求能力 `TREASURY`。
-- 付款：`target = ShadowPayout`，`params = abi.encode(payTo, reqHash)`，`reqHash = keccak256(abi.encode(network, asset, amount, payTo, resourceUrl))`。
+- 付款：`target = ShadowPayout`，`params = abi.encode(payTo, reqHash)`，`reqHash = keccak256(abi.encode(string network, address asset, uint256 amount, address payTo, string resourceUrl))`（`network` 是 CAIP-2 字符串，如 `"eip155:84532"`）。
 - 理财存入（定期存款语义）：`method = TREASURY_SUPPLY`，`target = TreasuryAdapter`，`params = abi.encode(vault, term, returnCm, expectedQ, returnMemo)`。到期后任何人可调用 `TreasuryAdapter.withdraw(positionId)`，赎回并以 `returnCm`（面额 `expectedQ`，由理财 Agent 在存入时承诺）存回资金池，同时发出 `returnMemo`；多出的部分进储备，不足时报 `Shortfall` 并不铸票据。
 - 资金流（推送模型）：Gate 在验证通过后先把 `amount` 个代币转给 `target`，再调用 `target.onAuthorized(method, amount, params)`。资金回流只走 `Gate.depositFromAdapter(cm, q, memo)`，只允许白名单 adapter 调用，代币先转入 Gate。
 
 ## 6. 链上事件（前端和 MCP 靠它们重建状态）
 
+签名即 ABI，`indexed` 按下表；合约和 SDK 必须完全一致。
+
 | 合约 | 事件 | 用途 |
 |---|---|---|
-| Gate | `Executed(budgetNf, target, method, amount)` | 付款记录 |
-| Gate | `OwnerCiphertext(budgetNf, uint256[] ct)` | 主人扫描解密（取代 v9 的 `Accountability`） |
-| Gate | `NoteInserted(cm, index, newRoot)` | 重建票据树 |
-| Gate | `NoteMemo(uint256 indexed cm, bytes memo)` | 每张新票据的加密打开信息，用于恢复（§11） |
-| Gate / 签发树 | `Issued(certHash, index, newRoot)` | 重建签发树 |
-| Registry | `Registered(nf, leaf0, root)` / `Replaced(...)` | 重建根凭证树 |
-| Revocations | `Revoked(entry, index, oldRoot, newRoot)` | 重建撤销 IMT |
-| 群组 | `Joined(commitment, index, root)` | 重建群组树 |
+| Gate | `Executed(uint256 indexed budgetNf, address indexed target, bytes4 method, uint256 amount)` | 付款记录 |
+| Gate | `OwnerCiphertext(uint256 indexed budgetNf, uint256[] ct)` | 主人扫描解密 |
+| Gate | `NullifierSpent(uint256 indexed nullifier)` | **每次消耗票据都发**（`execute`、`transferBudget`），用于判断票据是否已花 |
+| Gate | `NoteInserted(uint256 indexed cm, uint256 index, uint256 root)` | 重建票据树 |
+| Gate | `NoteMemo(uint256 indexed cm, bytes memo)` | 新票据的加密打开信息（§11） |
+| Gate | `Issued(uint256 indexed certHash, uint256 index, uint256 root)` | 重建签发树 |
+| Gate | `StateRegistered(uint256 issued, uint256 revoked, uint256 root, uint256 stateRoot)` | 已登记的状态根组合 |
+| Registry | `Registered(uint256 indexed nf, uint256 leaf0, uint256 index, uint256 root)` | 根凭证树追加 |
+| Registry | `Replaced(uint256 indexed nf, uint256 oldLeaf0, uint256 newLeaf0, uint256 index, uint256 root)` | 根凭证树**原位替换**第 `index` 个叶子 |
+| Revocations | `Revoked(uint256 indexed entry, uint256 index, uint256 oldRoot, uint256 newRoot)` | 重建撤销 IMT |
+| 群组 | `Joined(uint256 indexed commitment, uint256 index, uint256 root)` | 重建群组树 |
+
+同步要求：
+- 按区块分段拉取日志（每段不超过 2,000 个区块，可配置），记录已处理到的区块；每次重新处理最后 12 个区块以应对重组。
+- 每处理完一批事件，用事件里的 `root` 与本地重建的根逐一比对，不一致立即报错。
+- 不认识的事件、或解码失败的事件要报出明确错误，不能静默跳过或崩溃在 `undefined` 上。
 
 状态根有宽限窗口；demo 部署时窗口设为几秒。
 
@@ -133,10 +153,18 @@ Agent 用 `delegate` 创建子 Agent 时，向主人信箱发送 `{"type": "dele
 ## 9. 信箱 API
 
 ```
-POST /box/:recipient        body: { "ct": "<base64 sealed box>" }   -> { "id": n }
-GET  /box/:recipient?after=n                                          -> [{ "id", "ct", "ts" }]
+POST /box/:recipient          body: { "ct": "<base64>" }（只允许这一个字段，多余字段 400）   -> 201 { "id": n }
+GET  /box/:recipient?after=n                                                                    -> 200 [{ "id", "ct", "ts" }]
 ```
-`recipient` 是收件人 X25519 公钥的 hex。内容用 libsodium `crypto_box_seal` 加密，服务端只存密文。
+
+- `recipient`：64 个十六进制字符（32 字节）。消息收件箱用收件人的 X25519 公钥；备份槽用 §13 定义的槽 ID。
+- `ct`：标准 base64（带 padding）。消息用 libsodium `crypto_box_seal` 加密；备份槽存 §3 的信封。解码后 48 字节到 16 KiB。
+- `id`：每个箱子内严格递增，并且**写入可见的顺序与 id 顺序一致**（读到 id = k 的请求，之后不会再出现小于 k 的新消息）。GET 按 id 升序返回，最多 200 条；返回满 200 条说明可能还有更多，客户端应继续拉取。
+- 服务端：每个箱子最多保留 1,000 条或 30 天，超出的先删最旧的；限流按客户端 IP，部署在代理后面时只信任配置的代理头（Vercel 用 `x-real-ip`）；日志里不记录 `recipient` 和 `ct`。
+- **发送方不经认证**。任何人都能往任何箱子写入，所以：
+  - 客户端遇到解不开或格式不对的条目，**跳过并继续推进游标**，不能抛出异常；
+  - `delegated`、`receipt` 等消息一律当作不可信数据，展示前要和链上状态核对（凭证已签发、票据在树中、交易真实存在）。
+- 客户端统一用 libsodium-wrappers 0.7.15（见 `docs/ARCHITECTURE.md` §2）。
 
 ## 10. 部署文件
 
@@ -177,3 +205,16 @@ memo      = crypto_box_seal(plaintext, recipientBoxPk)                          
 | 测试网一键领取（演示） | `ShadowToken.faucetDeposit`：代币合约给自己铸币、授权 Gate、代为调用 `deposit`；每地址每天限额 | facilitator 代付 |
 
 入金是公开的（谁、何时、多少）。钱包只提供固定面额（10 / 50 / 100），并提示入金后隔一段时间再分给 Agent，以减少关联。分给 Agent 的 `transferBudget` 是私密的。入金得到的票据：`owner = 管家（ent1）`，`lin = [cert0, 0, 0, 0]`。
+
+## 13. 种子信封的备份与恢复
+
+信封（§3）本身已加密，所以放进信箱的**备份槽**，用于换浏览器或换电脑后恢复。备份槽是一个普通箱子，槽 ID 由公开信息派生，`ct` 直接是信封的 base64（不再套 sealed box）：
+
+| 槽 | 槽 ID（hex） | 内容 | 恢复方式 |
+|---|---|---|---|
+| passkey 槽 | `sha256(UTF-8("shadowpass/slot/passkey/") ‖ credentialId)` | mode 0 信封 | 新设备上用同步过来的 passkey 做一次发现式登录，拿到 `credentialId` 和 PRF，拉取槽内条目，逐个尝试解开 |
+| 恢复码槽 | `sha256(UTF-8("shadowpass/slot/recovery/") ‖ UTF-8(规范化恢复码))` | mode 1 信封 | 用户输入恢复码，拉取槽内条目，逐个尝试解开 |
+
+- 任何人都能往槽里写垃圾数据，所以必须逐条尝试，解得开的才算数（AES-GCM 的 tag 保证不会误解）。
+- 恢复码槽的 ID 只有知道恢复码的人才算得出来（100 bit），外人找不到这个槽。
+- 恢复出 seed 之后，按 §11 扫描 `NoteMemo` 找回票据，按 §6 同步链上状态。

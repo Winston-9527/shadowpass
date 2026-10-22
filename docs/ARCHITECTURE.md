@@ -57,7 +57,7 @@ flowchart TD
 - `circuits/scripts/world.mjs` 是**参考实现**，只用于电路测试和合约 fixtures。`sdk` 用它做逐字段对照测试，但运行时不引用。
 - 运行时禁止引用 `vendor/` 和 `spikes/`。
 - 内部依赖在 `package.json` 里写 `"@shadowpass/xxx": "*"`，由 workspaces 解析为本地包；源码直接导出 `src/index.ts`（`exports` 指向 TS 源码，用 `tsx` / Vite 运行）。需要打包时由各包自行加 `build`。
-- 外部依赖统一：链交互用 **viem**（不用 ethers），证明用 **snarkjs 0.7.6**，BabyJub/EdDSA/Poseidon 用 **circomlibjs 0.1.7** 和 **poseidon-lite 0.3.0**，Merkle 树用 **@zk-kit/lean-imt 2.2.5**，信箱加密用 **libsodium-wrappers**，x402 用 **@x402/* 2.28.0**，MCP 用 **@modelcontextprotocol/sdk**，校验用 **zod**。版本在首次引入时固定（不用 `^`）。
+- 外部依赖统一：链交互用 **viem**（不用 ethers），证明用 **snarkjs 0.7.6**，BabyJub/EdDSA/Poseidon 用 **circomlibjs 0.1.7** 和 **poseidon-lite 0.3.0**，Merkle 树用 **@zk-kit/lean-imt 2.2.5**，信箱和备忘加密用 **libsodium-wrappers 0.7.15**，x402 用 **@x402/* 2.28.0**，MCP 用 **@modelcontextprotocol/sdk**，校验用 **zod**。版本在首次引入时固定（不用 `^`）。
 
 ## 3. `@shadowpass/sdk` 的模块与对外 API（工单 #6 实现，其他工单按此调用）
 
@@ -81,8 +81,8 @@ flowchart TD
 
 - `circuits/scripts/publish-artifacts.sh`（#2 编写）：把 wasm、zkey、vk、`MANIFEST.sha256` 复制到 `apps/wallet/public/zk/circuits-v<N>/`（不进 git）。
 - 钱包部署后，产物公开在 `https://shadowpass-wallet.vercel.app/zk/circuits-v<N>/`。zkey 不是秘密。
-- MCP、facilitator、浏览器都通过 `SHADOWPASS_ARTIFACTS`（URL 或本地目录）加载，`sdk.prove.loadArtifacts` 按 MANIFEST 校验哈希，不匹配就拒绝。
-- 改了电路就升版本号（`circuits-v2`），verifier 同步重新部署。
+- MCP、facilitator、浏览器都通过 `SHADOWPASS_ARTIFACTS`（URL 或本地目录）加载。`sdk.prove.loadArtifacts` 校验哈希时，**以 SDK 内置的哈希表为准**（构建时从仓库里提交的 `circuits/zk/MANIFEST.sha256` 生成），不能只信托管方返回的 MANIFEST，否则恶意托管方可以同时替换 zkey、vk 和 MANIFEST。
+- 改了电路就升版本号，verifier 同步重新部署。当前版本是 `circuits-v2`（A2）；`.env.example` 的默认值同步改为 v2。
 
 ## 5. 配置
 
@@ -92,6 +92,7 @@ flowchart TD
 
 ## 6. 测试与 CI
 
+- 每个 TS 包的 `tsconfig` 要覆盖 `src` 和测试目录（可单独加 `tsconfig.test.json`），`npm run typecheck` 必须检查到测试代码。
 - 每个包 `npm test` 必须不依赖 circom 和本地链即可运行（需要证明的测试用进 git 的 fixtures 或标记为集成测试 `*.int.test.ts`，CI 跳过）。
 - 合约测试用 `contracts/test/fixtures/*.json`（真实证明，由 `npm run fixtures -w @shadowpass/contracts` 生成并提交）。
 - CI（`.github/workflows/ci.yml`）：`npm ci` → `npm run typecheck` → `npm test -w packages -w services -w apps -w contracts`（不含 circuits，它需要 circom 和 build 产物；contracts 的 test 脚本即 `forge test`）。
