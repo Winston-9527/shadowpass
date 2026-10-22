@@ -51,6 +51,7 @@ contract TreasuryAdapter is IAgentTarget, Ownable, ReentrancyGuard {
     error MissingFunds();
     error BadField();
     error MemoTooLong();
+    error ExpectedQTooHigh();
 
     event VaultAllowed(address indexed vault, bool allowed);
     event PositionOpened(
@@ -91,6 +92,7 @@ contract TreasuryAdapter is IAgentTarget, Ownable, ReentrancyGuard {
         if (expectedQ == 0) revert ZeroExpectedQ();
         if (returnCm >= P || expectedQ >= (1 << 64)) revert BadField();
         if (returnMemo.length > MAX_MEMO) revert MemoTooLong();
+        if (expectedQ > _quote(vault, amount, term)) revert ExpectedQTooHigh();
 
         token.forceApprove(vault, amount);
         uint256 shares = IERC4626(vault).deposit(amount, address(this));
@@ -116,13 +118,17 @@ contract TreasuryAdapter is IAgentTarget, Ownable, ReentrancyGuard {
         uint256 returnCm = position.returnCm;
         bytes memory returnMemo = position.returnMemo;
         uint256 assets = IERC4626(position.vault).redeem(shares, address(this), address(this));
+        uint256 shareValue = shares == 0 ? 0 : (assets + shares - 1) / shares;
+        uint256 tolerance = shareValue + ROUNDING_MARGIN;
+        uint256 percentTolerance = expectedQ / 10_000;
+        if (percentTolerance > tolerance) tolerance = percentTolerance;
 
         if (assets >= expectedQ) {
             uint256 reserveAdded = assets - expectedQ;
             reserve += reserveAdded;
             _returnNote(returnCm, expectedQ, returnMemo);
             emit TreasuryWithdrawn(positionId, assets, expectedQ, reserveAdded);
-        } else if (expectedQ - assets <= reserve) {
+        } else if (expectedQ - assets <= tolerance && expectedQ - assets <= reserve) {
             reserve -= expectedQ - assets;
             _returnNote(returnCm, expectedQ, returnMemo);
             emit TreasuryWithdrawn(positionId, assets, expectedQ, 0);
@@ -133,6 +139,10 @@ contract TreasuryAdapter is IAgentTarget, Ownable, ReentrancyGuard {
     }
 
     function quote(address vault, uint256 amount, uint256 term) external view returns (uint256 expectedQ) {
+        return _quote(vault, amount, term);
+    }
+
+    function _quote(address vault, uint256 amount, uint256 term) internal view returns (uint256 expectedQ) {
         if (amount == 0 || term == 0) return 0;
         uint256 shares = IERC4626(vault).previewDeposit(amount);
         uint256 fallbackQ = IERC4626(vault).previewRedeem(shares);
@@ -140,7 +150,9 @@ contract TreasuryAdapter is IAgentTarget, Ownable, ReentrancyGuard {
         try IMockVaultQuote(vault).previewDepositRedeemAt(amount, term) returns (uint256 futureQ) {
             quoted = futureQ;
         } catch {}
-        return quoted > ROUNDING_MARGIN ? quoted - ROUNDING_MARGIN : 0;
+        uint256 shareValue = shares == 0 ? 0 : (quoted + shares - 1) / shares;
+        uint256 margin = shareValue + ROUNDING_MARGIN;
+        return quoted > margin ? quoted - margin : 0;
     }
 
     function _returnNote(uint256 returnCm, uint256 expectedQ, bytes memory returnMemo) private {

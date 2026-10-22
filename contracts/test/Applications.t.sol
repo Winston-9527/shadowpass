@@ -67,6 +67,41 @@ contract MockShadowGate is IShadowGate {
     }
 }
 
+contract LossVault {
+    IERC20 public immutable token;
+    uint256 public immutable previewDivisor;
+    uint256 public immutable previewBias;
+    uint256 public immutable redeemDivisor;
+    uint256 public shares;
+
+    constructor(IERC20 token_, uint256 previewDivisor_, uint256 previewBias_, uint256 redeemDivisor_) {
+        token = token_;
+        previewDivisor = previewDivisor_;
+        previewBias = previewBias_;
+        redeemDivisor = redeemDivisor_;
+    }
+
+    function previewDeposit(uint256 assets) external pure returns (uint256) {
+        return assets;
+    }
+
+    function previewRedeem(uint256 shares_) external view returns (uint256) {
+        return shares_ / previewDivisor + previewBias;
+    }
+
+    function deposit(uint256 assets, address) external returns (uint256) {
+        token.transferFrom(msg.sender, address(this), assets);
+        shares += assets;
+        return assets;
+    }
+
+    function redeem(uint256 shares_, address receiver, address) external returns (uint256 assets) {
+        assets = shares_ / redeemDivisor;
+        shares -= shares_;
+        token.transfer(receiver, assets);
+    }
+}
+
 contract ApplicationsTest is Test {
     uint256 private constant DAY = 1 days;
     uint256 private constant TERM = 3 minutes;
@@ -201,9 +236,23 @@ contract ApplicationsTest is Test {
         assertEq(gate.adapterDeposits(), 1);
     }
 
+    function test_treasury_quote_covers_delayed_inclusion() public {
+        uint256 amount = 10 * 10 ** 6;
+        uint256 expectedQ = adapter.quote(address(vault), amount, TERM);
+        vm.warp(block.timestamp + 30);
+        uint256 positionId = _supply(amount, expectedQ, 0x33, hex"33");
+        (, uint256 shares, uint256 maturity,,,,) = adapter.positions(positionId);
+
+        vm.warp(maturity);
+        assertGe(vault.previewRedeem(shares), expectedQ);
+        adapter.withdraw(positionId);
+        assertEq(gate.adapterDeposits(), 1);
+    }
+
     function test_treasury_rejects_early_withdrawal_and_non_whitelisted_vault() public {
         uint256 amount = 1 * 10 ** 6;
-        uint256 positionId = _supply(amount, amount, 1, hex"01");
+        uint256 expectedQ = adapter.quote(address(vault), amount, TERM);
+        uint256 positionId = _supply(amount, expectedQ, 1, hex"01");
         vm.expectRevert(TreasuryAdapter.BeforeMaturity.selector);
         adapter.withdraw(positionId);
 
@@ -220,6 +269,11 @@ contract ApplicationsTest is Test {
         vm.expectRevert(TreasuryAdapter.BadField.selector);
         gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, amount, params);
 
+        uint256 currentQuote = adapter.quote(address(vault), amount, TERM);
+        params = abi.encode(address(vault), TERM, uint256(2), currentQuote + 1, hex"02");
+        vm.expectRevert(TreasuryAdapter.ExpectedQTooHigh.selector);
+        gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, amount, params);
+
         params = abi.encode(address(vault), TERM, uint256(1) << 255, amount, hex"02");
         vm.expectRevert(TreasuryAdapter.BadField.selector);
         gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, amount, params);
@@ -231,29 +285,30 @@ contract ApplicationsTest is Test {
     }
 
     function test_treasury_shortfall_keeps_funds_in_reserve() public {
-        MockVault noYield = new MockVault(IERC20(address(token)), "No Yield", "zero", 0, 0);
-        adapter.setVault(address(noYield), true);
+        LossVault lossVault = new LossVault(IERC20(address(token)), 1, 0, 2);
+        adapter.setVault(address(lossVault), true);
         uint256 amount = 5 * 10 ** 6;
-        uint256 expectedQ = amount + 1;
-        bytes memory params = abi.encode(address(noYield), TERM, uint256(7), expectedQ, hex"07");
+        uint256 expectedQ = adapter.quote(address(lossVault), amount, TERM);
+        bytes memory params = abi.encode(address(lossVault), TERM, uint256(7), expectedQ, hex"07");
         gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, amount, params);
         uint256 positionId = adapter.nextPositionId() - 1;
 
         vm.warp(block.timestamp + TERM + 1);
         vm.expectEmit(true, false, false, true, address(adapter));
-        emit TreasuryAdapter.Shortfall(positionId, expectedQ, amount);
+        emit TreasuryAdapter.Shortfall(positionId, expectedQ, amount / 2);
         adapter.withdraw(positionId);
 
-        assertEq(adapter.reserve(), amount);
+        assertEq(adapter.reserve(), amount / 2);
         assertEq(gate.adapterDeposits(), 0);
     }
 
     function test_treasury_reserve_covers_small_shortfall() public {
-        MockVault noYield = new MockVault(IERC20(address(token)), "No Yield", "zero", 0, 0);
-        adapter.setVault(address(noYield), true);
+        LossVault lossVault = new LossVault(IERC20(address(token)), 1, 5, 1);
+        adapter.setVault(address(lossVault), true);
 
         uint256 firstAmount = 5 * 10 ** 6;
-        bytes memory firstParams = abi.encode(address(noYield), TERM, uint256(1), firstAmount + 1, hex"01");
+        uint256 firstExpectedQ = adapter.quote(address(lossVault), firstAmount, TERM);
+        bytes memory firstParams = abi.encode(address(lossVault), TERM, uint256(1), firstExpectedQ, hex"01");
         gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, firstAmount, firstParams);
         uint256 firstId = adapter.nextPositionId() - 1;
         vm.warp(block.timestamp + TERM + 1);
@@ -261,23 +316,24 @@ contract ApplicationsTest is Test {
         assertEq(adapter.reserve(), firstAmount);
 
         uint256 secondAmount = 1 * 10 ** 6;
-        uint256 secondExpectedQ = secondAmount + 2;
-        bytes memory secondParams = abi.encode(address(noYield), TERM, uint256(2), secondExpectedQ, hex"02");
+        uint256 secondExpectedQ = adapter.quote(address(lossVault), secondAmount, TERM);
+        bytes memory secondParams = abi.encode(address(lossVault), TERM, uint256(2), secondExpectedQ, hex"02");
         gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, secondAmount, secondParams);
         uint256 secondId = adapter.nextPositionId() - 1;
         vm.warp(block.timestamp + TERM + 1);
         adapter.withdraw(secondId);
 
-        assertEq(adapter.reserve(), firstAmount - 2);
+        assertEq(adapter.reserve(), firstAmount - 1);
         assertEq(gate.adapterDeposits(), 1);
         assertEq(gate.lastAdapterQ(), secondExpectedQ);
     }
 
     function test_treasury_rejects_underfunded_push_with_reserve() public {
-        MockVault noYield = new MockVault(IERC20(address(token)), "No Yield", "zero", 0, 0);
-        adapter.setVault(address(noYield), true);
+        LossVault lossVault = new LossVault(IERC20(address(token)), 1, 5, 1);
+        adapter.setVault(address(lossVault), true);
         uint256 reserveAmount = 5 * 10 ** 6;
-        bytes memory params = abi.encode(address(noYield), TERM, uint256(1), reserveAmount + 1, hex"01");
+        uint256 reserveExpectedQ = adapter.quote(address(lossVault), reserveAmount, TERM);
+        bytes memory params = abi.encode(address(lossVault), TERM, uint256(1), reserveExpectedQ, hex"01");
         gate.executeTarget(address(adapter), MethodIds.TREASURY_SUPPLY, reserveAmount, params);
         uint256 positionId = adapter.nextPositionId() - 1;
         vm.warp(block.timestamp + TERM + 1);
@@ -285,7 +341,8 @@ contract ApplicationsTest is Test {
         assertEq(adapter.reserve(), reserveAmount);
 
         uint256 amount = 1 * 10 ** 6;
-        params = abi.encode(address(noYield), TERM, uint256(2), amount, hex"02");
+        uint256 expectedQ = adapter.quote(address(lossVault), amount, TERM);
+        params = abi.encode(address(lossVault), TERM, uint256(2), expectedQ, hex"02");
         vm.expectRevert(TreasuryAdapter.MissingFunds.selector);
         gate.executeTargetUnderfunded(address(adapter), MethodIds.TREASURY_SUPPLY, amount, amount - 1, params);
     }
