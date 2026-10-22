@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IAgentTarget} from "./interfaces/IAgentTarget.sol";
 
-/// Pays merchants from the token amount pushed by ShadowGate. A payee/request hash pair is one-time.
+/// Pays merchants from the token amount pushed by ShadowGate. Settlement uniqueness is enforced by the Gate nullifier.
 contract ShadowPayout is IAgentTarget {
     using SafeERC20 for IERC20;
 
@@ -13,13 +13,10 @@ contract ShadowPayout is IAgentTarget {
 
     address public immutable gate;
     IERC20 public immutable token;
-    mapping(bytes32 => bool) public paid;
-
     error NotGate();
     error UnknownMethod();
     error ZeroAddress();
     error ZeroPayTo();
-    error RequestAlreadyPaid();
 
     event Paid(bytes32 indexed reqHash, address indexed payTo, uint256 amount);
 
@@ -35,9 +32,6 @@ contract ShadowPayout is IAgentTarget {
 
         (address payTo, bytes32 reqHash) = abi.decode(params, (address, bytes32));
         if (payTo == address(0)) revert ZeroPayTo();
-        bytes32 paymentKey = keccak256(abi.encode(payTo, reqHash));
-        if (paid[paymentKey]) revert RequestAlreadyPaid();
-        paid[paymentKey] = true;
 
         token.safeTransfer(payTo, amount);
         emit Paid(reqHash, payTo, amount);
