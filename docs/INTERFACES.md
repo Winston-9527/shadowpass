@@ -82,11 +82,13 @@ ctx_hash = uint256(keccak256(abi.encode(block.chainid, address(gate), act.method
 
 - `memoChange` 是必填参数（没有找零备忘时传空字节 `0x`，并且调用方必须显式传入）。
 - 电路把 `ctx_hash` 当作不透明的公开输入，所以在哈希里加入 `keccak256(memoChange)` 不需要改电路，却能防止转发方（facilitator）替换找零票据的备忘。
-- `amount` 必须等于 `q_spent`。`requiredCap[method]` 由 Gate 管理员通过 `setMethod` 配置，作为 `act_req_cap` 公开输入。
+- `amount` 必须等于 `q_spent`。管理员用 `setMethod(method, cap, target, enabled)` 配置：`requiredCap[method]` 作为 `act_req_cap` 公开输入，**`act.target` 必须等于为该方法登记的 `target`**（PAY → `ShadowPayout`，TREASURY_SUPPLY → `TreasuryAdapter`）。否则持有 TREASURY 能力的 Agent 可以把 target 指向自己的合约，直接把资金转走。
 - 方法：`PAY = bytes4(keccak256("shadowpass.PAY"))` 要求能力 `PAY`；`TREASURY_SUPPLY = bytes4(keccak256("shadowpass.TREASURY_SUPPLY"))` 要求能力 `TREASURY`。
-- 付款：`target = ShadowPayout`，`params = abi.encode(payTo, reqHash)`，`reqHash = keccak256(abi.encode(string network, address asset, uint256 amount, address payTo, string resourceUrl))`（`network` 是 CAIP-2 字符串，如 `"eip155:84532"`）。
-- 理财存入（定期存款语义）：`method = TREASURY_SUPPLY`，`target = TreasuryAdapter`，`params = abi.encode(vault, term, returnCm, expectedQ, returnMemo)`。到期后任何人可调用 `TreasuryAdapter.withdraw(positionId)`，赎回并以 `returnCm`（面额 `expectedQ`，由理财 Agent 在存入时承诺）存回资金池，同时发出 `returnMemo`；多出的部分进储备，不足时报 `Shortfall` 并不铸票据。
-- 资金流（推送模型）：Gate 在验证通过后先把 `amount` 个代币转给 `target`，再调用 `target.onAuthorized(method, amount, params)`。资金回流只走 `Gate.depositFromAdapter(cm, q, memo)`，只允许白名单 adapter 调用，代币先转入 Gate。
+- 付款：`target = ShadowPayout`，`params = abi.encode(payTo, reqHash)`，`ShadowPayout` 按 `keccak256(abi.encode(payTo, reqHash))` 防重放（只按 `reqHash` 会被别人抢先占用），`reqHash = keccak256(abi.encode(string network, address asset, uint256 amount, address payTo, string resourceUrl))`（`network` 是 CAIP-2 字符串，如 `"eip155:84532"`）。
+- 理财存入（定期存款语义）：`method = TREASURY_SUPPLY`，`target = TreasuryAdapter`，`params = abi.encode(vault, term, returnCm, expectedQ, returnMemo)`。存入时，adapter 必须校验 `returnCm < P`、`returnMemo` 不超过 512 字节、`expectedQ < 2^64`，否则拒绝（不然取回时会永远失败，本金被锁死）。`quote()` 必须是保守估计：模拟 deposit 再 redeem 的取整损失，并至少再减 2 wei。到期后任何人可调用 `TreasuryAdapter.withdraw(positionId)`，赎回并以 `returnCm`（面额 `expectedQ`，由理财 Agent 在存入时承诺）存回资金池，同时发出 `returnMemo`；多出的部分进储备；不足部分如果不超过储备余额，就从储备补足，照常铸票据；超过储备余额时才报 `Shortfall`，不铸票据，资金留在储备里。
+- 资金流：
+  - **付出（推送）**：`execute` 验证通过、记下 nullifier 之后，Gate 先把 `amount` 个代币转给 `target`，再调用 `target.onAuthorized(method, amount, params)`。target 只能使用本次收到的 `amount`，不得动用自己的储备。
+  - **回流（拉取）**：adapter 先 `approve(gate, q)`，再调用 `Gate.depositFromAdapter(cm, q, memo)`；Gate 用 `transferFrom(adapter, gate, q)` 收款，然后插入票据。只允许白名单 adapter 调用；adapter 调用后把授权清零。
 
 ## 6. 链上事件（前端和 MCP 靠它们重建状态）
 
@@ -109,9 +111,12 @@ ctx_hash = uint256(keccak256(abi.encode(block.chainid, address(gate), act.method
 同步要求：
 - 按区块分段拉取日志（每段不超过 2,000 个区块，可配置），记录已处理到的区块；每次重新处理最后 12 个区块以应对重组。
 - 每处理完一批事件，用事件里的 `root` 与本地重建的根逐一比对，不一致立即报错。
-- 不认识的事件、或解码失败的事件要报出明确错误，不能静默跳过或崩溃在 `undefined` 上。
+- 拉取日志时用本表事件的 topic0 做过滤（`getLogs` 的 `topics` 参数）。合约可以发出本表以外的事件（管理事件等），它们不会进入同步；本表事件解码失败则报出明确错误，不能静默跳过或崩溃在 `undefined` 上。
+- 同步失败（任意一段 `getLogs` 出错）不能破坏已有状态：在新对象里完整重放，成功后再替换；并发的 `update()` 共享同一个进行中的 Promise。
 
-状态根有宽限窗口；demo 部署时窗口设为几秒。
+根的有效期：
+- **只追加的树**（签发树、票据树、群组树）：接受历史上出现过的任何根（合约记录 `knownRoot[root] = true`）。只追加不会删除成员，旧根依然有效；花费由 nullifier 控制，吊销由撤销树控制。这样，别人频繁 `issue`、`deposit`、`join` 也不会让正在提交的证明失效。
+- **会替换或会增长约束的树**（根凭证树，因为有原位替换；撤销树）：保留宽限窗口。demo 部署时设为 10 秒。
 
 ## 7. 配对与凭证包
 
@@ -157,8 +162,8 @@ POST /box/:recipient          body: { "ct": "<base64>" }（只允许这一个字
 GET  /box/:recipient?after=n                                                                    -> 200 [{ "id", "ct", "ts" }]
 ```
 
-- `recipient`：64 个十六进制字符（32 字节）。消息收件箱用收件人的 X25519 公钥；备份槽用 §13 定义的槽 ID。
-- `ct`：标准 base64（带 padding）。消息用 libsodium `crypto_box_seal` 加密；备份槽存 §3 的信封。解码后 48 字节到 16 KiB。
+- `recipient`：64 个十六进制字符（32 字节），是收件人的 X25519 公钥。备份槽不走这组接口，见 §13 的 `/slot`。
+- `ct`：标准 base64（带 padding），内容是 libsodium `crypto_box_seal` 的密文，解码后 48 字节到 16 KiB。
 - `id`：每个箱子内严格递增，并且**写入可见的顺序与 id 顺序一致**（读到 id = k 的请求，之后不会再出现小于 k 的新消息）。GET 按 id 升序返回，最多 200 条；返回满 200 条说明可能还有更多，客户端应继续拉取。
 - 服务端：每个箱子最多保留 1,000 条或 30 天，超出的先删最旧的；限流按客户端 IP，部署在代理后面时只信任配置的代理头（Vercel 用 `x-real-ip`）；日志里不记录 `recipient` 和 `ct`。
 - **发送方不经认证**。任何人都能往任何箱子写入，所以：
@@ -202,19 +207,33 @@ memo      = crypto_box_seal(plaintext, recipientBoxPk)                          
 | 方式 | 流程 | gas |
 |---|---|---|
 | 从外部钱包充值（真实流程） | 钱包页面经 EIP-1193（MetaMask 等）连接外部地址 → 本地生成 `budget_mint` 证明和 `cm` → 外部钱包发出 `approve` 和 `Gate.deposit` | 外部地址支付 |
-| 测试网一键领取（演示） | `ShadowToken.faucetDeposit`：代币合约给自己铸币、授权 Gate、代为调用 `deposit`；每地址每天限额 | facilitator 代付 |
+| 测试网一键领取（演示） | `ShadowToken.faucetDeposit`：代币合约给自己铸币、授权 Gate、代为调用 `deposit`。走 facilitator 代付时 `msg.sender` 都是 facilitator，所以合约只设全局每日上限，单个用户的限额由 facilitator 按 IP 控制 | facilitator 代付 |
 
 入金是公开的（谁、何时、多少）。钱包只提供固定面额（10 / 50 / 100），并提示入金后隔一段时间再分给 Agent，以减少关联。分给 Agent 的 `transferBudget` 是私密的。入金得到的票据：`owner = 管家（ent1）`，`lin = [cert0, 0, 0, 0]`。
 
 ## 13. 种子信封的备份与恢复
 
-信封（§3）本身已加密，所以放进信箱的**备份槽**，用于换浏览器或换电脑后恢复。备份槽是一个普通箱子，槽 ID 由公开信息派生，`ct` 直接是信封的 base64（不再套 sealed box）：
+信封（§3）本身已加密，备份在信箱服务的**备份槽**里，用于换浏览器或换电脑后恢复。备份槽和消息箱是两组独立接口，规则不同：
 
-| 槽 | 槽 ID（hex） | 内容 | 恢复方式 |
-|---|---|---|---|
-| passkey 槽 | `sha256(UTF-8("shadowpass/slot/passkey/") ‖ credentialId)` | mode 0 信封 | 新设备上用同步过来的 passkey 做一次发现式登录，拿到 `credentialId` 和 PRF，拉取槽内条目，逐个尝试解开 |
-| 恢复码槽 | `sha256(UTF-8("shadowpass/slot/recovery/") ‖ UTF-8(规范化恢复码))` | mode 1 信封 | 用户输入恢复码，拉取槽内条目，逐个尝试解开 |
+```
+POST /slot/:slot      body: { "ct": "<base64 信封>" }（只允许这一个字段）   -> 201 { "id": n }
+GET  /slot/:slot?after=n                                                    -> 200 [{ "id", "ct", "ts" }]
+```
 
-- 任何人都能往槽里写垃圾数据，所以必须逐条尝试，解得开的才算数（AES-GCM 的 tag 保证不会误解）。
-- 恢复码槽的 ID 只有知道恢复码的人才算得出来（100 bit），外人找不到这个槽。
+| 槽 | 槽 ID（64 个 hex） | 内容 |
+|---|---|---|
+| passkey 槽 | `sha256(UTF-8("shadowpass/slot/passkey/") ‖ UTF-8(base64url_nopad(rawId)))` | mode 0 信封 |
+| 恢复码槽 | `sha256(UTF-8("shadowpass/slot/recovery/") ‖ UTF-8(规范化恢复码))` | mode 1 信封 |
+
+`rawId` 是 WebAuthn 凭证的原始 ID 字节，`base64url_nopad` 是不带 `=` 的 base64url 编码。
+
+服务端规则（与 §9 的消息箱不同）：
+- **不过期、不淘汰**。每个槽最多 16 条，写满后拒绝新写入（409）。
+- `ct` 解码后必须是一个格式正确的 `SPW1` 信封：81 字节，前 4 字节为 `SPW1`，mode 为 0 或 1；否则返回 400。
+- 限流同 §9；日志不记录槽 ID 和 `ct`。
+
+客户端规则：
+- 恢复时拉取槽内全部条目（按 §9 的方式翻页），逐条尝试解开，解得开的才算数（AES-GCM 的 tag 保证不会误解）。
+- 槽 ID 只有持有 passkey 或恢复码的人才算得出来，外人无法定位到槽，也就无法往里灌垃圾数据。信箱运营方能看到槽 ID 和条数，也有能力删掉数据，所以钱包要同时在本地保留信封；“没有配置信箱”时，不能声称“可以换设备恢复”。
+- 写备份失败时，不能显示恢复码，也不能把钱包标记为已创建；要么重试成功，要么整体回滚。
 - 恢复出 seed 之后，按 §11 扫描 `NoteMemo` 找回票据，按 §6 同步链上状态。
