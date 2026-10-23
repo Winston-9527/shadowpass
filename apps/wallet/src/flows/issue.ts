@@ -16,11 +16,11 @@ import { serializeCert } from "./cert";
 import { waitForChainState, type WalletGateway } from "./chain";
 import { assertMemoInLogs, memoHex } from "./memo";
 import type { ProofService } from "./prove";
-import type { PairingPayload, ProgressReporter, WalletLedger } from "./types";
-import { bytesToHex } from "../lib/bytes";
+import type { CredentialDelivery, PairingPayload, ProgressReporter, WalletLedger } from "./types";
+import { bytesToHex, hexToBytes } from "../lib/bytes";
 
 export interface CredentialMailer {
-  send(toPk: Uint8Array | string, message: unknown): Promise<number>;
+  send(toPk: Uint8Array, message: unknown): Promise<number>;
 }
 
 export interface IssueCardOptions {
@@ -41,8 +41,17 @@ export interface IssueCardOptions {
 export interface IssueCardResult {
   ledger: WalletLedger;
   cardId: string;
-  mailboxId: number;
+  mailboxId?: number;
+  deliveryError?: string;
   timings: { proofMs: number; chainMs: number; totalMs: number };
+}
+
+export interface DeliverCardOptions {
+  ledger: WalletLedger;
+  cardId: string;
+  mailer: CredentialMailer;
+  onCheckpoint?(ledger: WalletLedger): Promise<void>;
+  progress?: ProgressReporter;
 }
 
 function storedNote(note: Note): WalletLedger["notes"][number]["note"] {
@@ -76,7 +85,7 @@ export async function issueCard(options: IssueCardOptions): Promise<IssueCardRes
   if (options.expiry <= now) throw new Error("card expiry must be in the future");
   if (options.expiry > BigInt(options.ledger.root.expiry)) throw new Error("card expiry exceeds the root certificate");
 
-  const state = await options.gateway.sync();
+  let state = await options.gateway.sync();
   const root = options.ledger.root;
   const rootHash = BigInt(root.hash);
   if (state.rootTree.indexOf(rootHash) < 0) throw new Error("root certificate is not registered on-chain");
@@ -109,6 +118,11 @@ export async function issueCard(options: IssueCardOptions): Promise<IssueCardRes
     options.progress?.("Issuing Agent certificate");
     issueTransaction = (await options.gateway.relay("issue", { certHash: cert1.hash.toString() })).transaction;
   }
+  state = await options.gateway.sync();
+  if (state.issued.indexOf(cert1.hash) < 0) {
+    state = await waitForChainState(options.gateway, (candidate) => candidate.issued.indexOf(cert1.hash) >= 0);
+  }
+  if (state.issued.indexOf(cert1.hash) < 0) throw new Error("Agent certificate is not visible on-chain");
 
   const q1 = options.budget;
   const q2 = parent.note.q - q1;
@@ -139,14 +153,6 @@ export async function issueCard(options: IssueCardOptions): Promise<IssueCardRes
   });
   assertMemoInLogs(receipt.logs, transfer.out1, agentMemo);
   assertMemoInLogs(receipt.logs, transfer.out2, changeMemo);
-  await waitForChainState(
-    options.gateway,
-    (candidate) => candidate.issued.indexOf(cert1.hash) >= 0
-      && candidate.notes.indexOf(noteCm(transfer.out1)) >= 0
-      && (q2 === 0n || candidate.notes.indexOf(noteCm(transfer.out2)) >= 0),
-  );
-  chainMs = performance.now() - chainStarted;
-
   const cardId = cert1.hash.toString();
   const chain: CertificateBundle["chain"] = [root, serializedCert1];
   const certificateBundle: CertificateBundle = {
@@ -156,6 +162,11 @@ export async function issueCard(options: IssueCardOptions): Promise<IssueCardRes
     chain,
     note: storedNote(transfer.out1),
     owner: { box: bytesToHex(options.bundle.box.publicKey) },
+  };
+  const delivery: CredentialDelivery = {
+    type: "credential",
+    pair: options.pairing.pair,
+    bundle: certificateBundle,
   };
   const createdAt = new Date().toISOString();
   let ledger: WalletLedger = {
@@ -180,6 +191,7 @@ export async function issueCard(options: IssueCardOptions): Promise<IssueCardRes
         note: storedNote(transfer.out1),
         issueTx: issueTransaction ?? options.ledger.cards.find((card) => card.id === cardId)?.issueTx ?? "",
         transferTx: receipt.transaction,
+        delivery,
         timings: { proofMs, chainMs, totalMs: performance.now() - started },
         createdAt,
       },
@@ -187,19 +199,62 @@ export async function issueCard(options: IssueCardOptions): Promise<IssueCardRes
     updatedAt: createdAt,
   };
   await options.onCheckpoint?.(ledger);
-  options.progress?.("Delivering encrypted credential");
-  const mailboxId = await options.mailer.send(options.pairing.boxPk, {
-    type: "credential",
-    pair: options.pairing.pair,
-    bundle: certificateBundle,
-  });
+  const visible = await waitForChainState(
+    options.gateway,
+    (candidate) => candidate.issued.indexOf(cert1.hash) >= 0
+      && candidate.notes.indexOf(noteCm(transfer.out1)) >= 0
+      && (q2 === 0n || candidate.notes.indexOf(noteCm(transfer.out2)) >= 0),
+  );
+  if (visible.issued.indexOf(cert1.hash) < 0 || visible.notes.indexOf(noteCm(transfer.out1)) < 0
+    || (q2 > 0n && visible.notes.indexOf(noteCm(transfer.out2)) < 0)) {
+    throw new Error("Agent budget transfer is not visible on-chain; retry delivery after the chain catches up");
+  }
+  chainMs = performance.now() - chainStarted;
   ledger = {
     ...ledger,
-    cards: ledger.cards.map((card) => card.id === cardId ? { ...card, status: "delivered", mailboxId } : card),
+    cards: ledger.cards.map((card) => card.id === cardId
+      ? { ...card, timings: { proofMs, chainMs, totalMs: performance.now() - started } }
+      : card),
     updatedAt: new Date().toISOString(),
   };
   await options.onCheckpoint?.(ledger);
-  return { ledger, cardId, mailboxId, timings: { proofMs, chainMs, totalMs: performance.now() - started } };
+  try {
+    const delivered = await deliverCardCredential({
+      ledger,
+      cardId,
+      mailer: options.mailer,
+      onCheckpoint: options.onCheckpoint,
+      progress: options.progress,
+    });
+    return { ledger: delivered.ledger, cardId, mailboxId: delivered.mailboxId, timings: { proofMs, chainMs, totalMs: performance.now() - started } };
+  } catch (cause) {
+    return {
+      ledger,
+      cardId,
+      deliveryError: cause instanceof Error ? cause.message : "credential delivery failed",
+      timings: { proofMs, chainMs, totalMs: performance.now() - started },
+    };
+  }
+}
+
+export async function deliverCardCredential(options: DeliverCardOptions): Promise<{ ledger: WalletLedger; mailboxId: number }> {
+  const card = options.ledger.cards.find((candidate) => candidate.id === options.cardId);
+  if (!card) throw new Error("card record is missing");
+  if (card.status === "delivered" && card.mailboxId !== undefined) {
+    return { ledger: options.ledger, mailboxId: card.mailboxId };
+  }
+  if (!card.delivery) throw new Error("card has no saved credential delivery package; issue it again only after checking the chain");
+  options.progress?.("Delivering encrypted credential");
+  const mailboxId = await options.mailer.send(hexToBytes(card.boxPk), card.delivery);
+  const ledger: WalletLedger = {
+    ...options.ledger,
+    cards: options.ledger.cards.map((candidate) => candidate.id === options.cardId
+      ? { ...candidate, status: "delivered", mailboxId }
+      : candidate),
+    updatedAt: new Date().toISOString(),
+  };
+  await options.onCheckpoint?.(ledger);
+  return { ledger, mailboxId };
 }
 
 function rootToCert(root: CertificateBundle["chain"][number], bundle: KeySet): Cert {
@@ -216,14 +271,19 @@ function rootToCert(root: CertificateBundle["chain"][number], bundle: KeySet): C
   };
 }
 
-export function availableStewardBudget(ledger: WalletLedger, state: { notes: { indexOf(value: bigint): number }; spentNullifiers: Set<string> }, stewardSk: bigint): bigint {
+export function availableStewardBudget(
+  ledger: WalletLedger,
+  state: { notes: { indexOf(value: bigint): number }; spentNullifiers: Set<string> },
+  steward: Pick<Identity, "Ax" | "Ay" | "sk">,
+): bigint {
   const rootHash = ledger.root ? BigInt(ledger.root.hash) : 0n;
   return ledger.notes
     .filter((entry) => entry.kind === "deposit" || entry.kind === "change")
     .map((entry) => noteFromStored(entry.note))
+    .filter((note) => note.own[0] === steward.Ax && note.own[1] === steward.Ay)
     .filter((note) => note.lin[0] === rootHash)
     .filter((note) => state.notes.indexOf(noteCm(note)) >= 0)
-    .filter((note) => !state.spentNullifiers.has(budgetNullifier(stewardSk, note).toString()))
+    .filter((note) => !state.spentNullifiers.has(budgetNullifier(steward.sk, note).toString()))
     .reduce((sum, note) => sum + note.q, 0n);
 }
 

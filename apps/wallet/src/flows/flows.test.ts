@@ -12,9 +12,9 @@ import {
   type KeySet,
 } from "@shadowpass/sdk";
 import { serializeCert } from "./cert";
-import { waitForChainState, type WalletGateway } from "./chain";
+import { submitExternalDeposit, waitForChainState, type WalletGateway } from "./chain";
 import { deposit } from "./deposit";
-import { issueCard } from "./issue";
+import { deliverCardCredential, issueCard } from "./issue";
 import { memoHex } from "./memo";
 import { onboard } from "./onboard";
 import type { ProofService } from "./prove";
@@ -37,6 +37,9 @@ class FakeProofs implements ProofService {
 
 class FakeGateway implements WalletGateway {
   readonly state = new ChainState();
+  readonly registryLeaves = new Map<string, bigint>();
+  registrations = 0;
+  transfers = 0;
 
   async sync(): Promise<ChainState> {
     return this.state;
@@ -50,6 +53,10 @@ class FakeGateway implements WalletGateway {
     return 7n;
   }
 
+  async registryLeaf(nf: bigint): Promise<bigint> {
+    return this.registryLeaves.get(nf.toString()) ?? 0n;
+  }
+
   async externalDeposit(): Promise<{ transaction: `0x${string}`; blockNumber: bigint; logs: unknown[] }> {
     throw new Error("not used");
   }
@@ -57,7 +64,20 @@ class FakeGateway implements WalletGateway {
   async relay(action: Parameters<WalletGateway["relay"]>[0], args: Record<string, unknown>): Promise<RelayResult> {
     const logs: unknown[] = [];
     if (action === "join") this.state.group.insert(BigInt(String(args.commitment)));
-    if (action === "register") this.state.rootTree.insert(BigInt(String(args.leaf0)));
+    if (action === "register") {
+      this.registrations += 1;
+      const leaf = BigInt(String(args.leaf0));
+      const oldLeaf = this.registryLeaves.get(String(args.nf)) ?? 0n;
+      if (oldLeaf === 0n) {
+        this.state.rootTree.insert(leaf);
+      } else {
+        const index = this.state.rootTree.indexOf(oldLeaf);
+        const expected = this.state.rootTree.proof(oldLeaf).siblings.map(String);
+        if (JSON.stringify(args.siblingNodes) !== JSON.stringify(expected)) throw new Error("wrong replacement siblings");
+        this.state.rootTree.update(index, leaf);
+      }
+      this.registryLeaves.set(String(args.nf), leaf);
+    }
     if (action === "faucetDeposit") {
       const cm = BigInt(String(args.cm));
       this.state.notes.insert(cm);
@@ -65,6 +85,7 @@ class FakeGateway implements WalletGateway {
     }
     if (action === "issue") this.state.issued.insert(BigInt(String(args.certHash)));
     if (action === "transferBudget") {
+      this.transfers += 1;
       const cm1 = BigInt(String(args.cm1));
       const cm2 = BigInt(String(args.cm2));
       this.state.notes.insert(cm1);
@@ -109,7 +130,8 @@ describe("wallet opening and card flows", () => {
     const buyer = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 40));
     const investor = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 80));
     const sent: unknown[] = [];
-    const mailer = { async send(_key: Uint8Array | string, message: unknown) { sent.push(message); return sent.length; } };
+    const sentKeys: Uint8Array[] = [];
+    const mailer = { async send(key: Uint8Array, message: unknown) { sentKeys.push(key); sent.push(message); return sent.length; } };
     const basePair = { v: 1 as const, pair: "ab".repeat(16) };
     const now = 2_000_001_000n;
     const pay = await issueCard({
@@ -147,6 +169,7 @@ describe("wallet opening and card flows", () => {
     expect(ledger.cards[0]).toMatchObject({ issueTx: TX_ISSUE, transferTx: TX_TRANSFER });
     expect(ledger.notes.find((note) => note.kind === "change")?.note.q).toBe("10000000");
     expect(sent).toHaveLength(2);
+    expect(sentKeys.every((key) => key instanceof Uint8Array && key.length === 32)).toBe(true);
     for (const message of sent) {
       const envelope = message as { bundle: Parameters<typeof encodeBundle>[0]; pair: string; type: string };
       expect(envelope.type).toBe("credential");
@@ -177,7 +200,7 @@ describe("wallet opening and card flows", () => {
     });
     const agent = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 70));
     let checkpoints = 0;
-    await expect(issueCard({
+    const failed = await issueCard({
       ledger,
       bundle,
       pairing: { v: 1, name: "采购 Agent", agentPk: { x: agent.sign.Ax, y: agent.sign.Ay }, boxPk: bytesHex(agent.box.publicKey), pair: "ef".repeat(16) },
@@ -189,9 +212,97 @@ describe("wallet opening and card flows", () => {
       mailer: { async send() { throw new Error("mailbox offline"); } },
       onCheckpoint: async () => { checkpoints += 1; },
       nowSeconds: 2_000_000_000n,
-    })).rejects.toThrow(/mailbox offline/);
-    expect(checkpoints).toBe(1);
+    });
+    expect(checkpoints).toBe(2);
+    expect(failed.deliveryError).toMatch(/mailbox offline/);
+    expect(failed.ledger.cards[0]).toMatchObject({ status: "pending_delivery", transferTx: TX_TRANSFER });
     expect(gateway.state.notes.leaves).toHaveLength(3);
+    const transfers = gateway.transfers;
+    const delivered = await deliverCardCredential({
+      ledger: failed.ledger,
+      cardId: failed.cardId,
+      mailer: { async send(key: Uint8Array) { expect(key).toHaveLength(32); return 9; } },
+      onCheckpoint: async (next) => { expect(next.cards[0]?.status).toBe("delivered"); },
+    });
+    expect(delivered.mailboxId).toBe(9);
+    expect(gateway.transfers).toBe(transfers);
+  });
+
+  it("replaces an existing root using root-tree siblings instead of group-tree siblings", async () => {
+    const bundle = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 21));
+    const gateway = new FakeGateway();
+    const opened = await onboard({ ledger: emptyLedger(31337, "anvil", bundle.sign.Ax), bundle, gateway, proofs: new FakeProofs(), nowSeconds: 2_000_000_000n });
+    const renewed = await onboard({
+      ledger: opened.ledger,
+      bundle,
+      gateway,
+      proofs: new FakeProofs(),
+      nowSeconds: 2_000_000_100n,
+      forceReplace: true,
+    });
+    expect(gateway.registrations).toBe(2);
+    expect(renewed.ledger.root?.hash).not.toBe(opened.ledger.root?.hash);
+    expect(gateway.state.rootTree.indexOf(BigInt(renewed.ledger.root!.hash))).toBe(0);
+  });
+
+  it("persists cert0 before registration so a timed-out transaction can be reconciled", async () => {
+    const bundle = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 41));
+    const gateway = new FakeGateway();
+    const checkpoints: WalletLedger[] = [];
+    await expect(onboard({
+      ledger: emptyLedger(31337, "anvil", bundle.sign.Ax),
+      bundle,
+      gateway,
+      proofs: new FakeProofs(),
+      nowSeconds: 2_000_000_000n,
+      onCheckpoint: async (ledger) => {
+        checkpoints.push(structuredClone(ledger));
+        if (checkpoints.length === 2) throw new Error("tab closed while waiting");
+      },
+    })).rejects.toThrow(/tab closed/);
+    const pending = checkpoints[0]!;
+    expect(pending.root).not.toBeNull();
+    expect(pending.rootRegistered).toBe(false);
+    const resumed = await onboard({ ledger: pending, bundle, gateway, proofs: new FakeProofs(), nowSeconds: 2_000_000_100n });
+    expect(resumed.ledger.root?.hash).toBe(pending.root?.hash);
+    expect(gateway.registrations).toBe(1);
+  });
+
+  it("sends the external deposit to the Gate after the token approval", async () => {
+    const writes: Array<{ address: string; functionName: string }> = [];
+    const deployment = {
+      chainId: 31337,
+      gate: `0x${"11".repeat(20)}` as const,
+      registry: `0x${"22".repeat(20)}` as const,
+      revocations: `0x${"33".repeat(20)}` as const,
+      group: `0x${"44".repeat(20)}` as const,
+      payout: `0x${"55".repeat(20)}` as const,
+      treasury: `0x${"66".repeat(20)}` as const,
+      vault: `0x${"77".repeat(20)}` as const,
+      token: `0x${"88".repeat(20)}` as const,
+      verifiers: { d1: `0x${"91".repeat(20)}` as const, d2: `0x${"92".repeat(20)}` as const, reg: `0x${"93".repeat(20)}` as const, revoke: `0x${"94".repeat(20)}` as const, transfer: `0x${"95".repeat(20)}` as const, mint: `0x${"96".repeat(20)}` as const },
+      startBlock: 0,
+      facilitator: "http://localhost",
+      mailbox: "http://localhost",
+    };
+    const bundle = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 61));
+    const note = createNote(bundle.steward, 10_000_000n, [1n]);
+    let call = 0;
+    await submitExternalDeposit({
+      account: `0x${"aa".repeat(20)}`,
+      deployment,
+      input: { proof: { a: ["1", "2"], b: [["3", "4"], ["5", "6"]], c: ["7", "8"], publicSignals: [noteCm(note).toString(), note.q.toString()] }, cm: noteCm(note), q: note.q, note, memo: new Uint8Array([1, 2, 3]) },
+      writeContract: async (parameters) => {
+        writes.push({ address: parameters.address, functionName: parameters.functionName });
+        call += 1;
+        return `0x${call.toString(16).padStart(64, "0")}` as const;
+      },
+      waitForReceipt: async () => ({ status: "success", blockNumber: 1n, logs: [{ eventName: "NoteMemo", args: { cm: noteCm(note), memo: memoHex(new Uint8Array([1, 2, 3])) } }] }),
+    });
+    expect(writes).toEqual([
+      { address: deployment.token, functionName: "approve" },
+      { address: deployment.gate, functionName: "deposit" },
+    ]);
   });
 
   it("retries chain state reads until an emitted event is visible", async () => {

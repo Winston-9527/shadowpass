@@ -19,9 +19,14 @@ import {
 import { assertMemoInLogs, memoHex } from "./memo";
 import type { CalldataProof, RelayResult } from "./types";
 
-const registryAbi = parseAbi(["function domain() view returns (uint256)"]);
+const registryAbi = parseAbi([
+  "function domain() view returns (uint256)",
+  "function leafOfNullifier(uint256 nf) view returns (uint256)",
+]);
 const tokenAbi = parseAbi([
   "function approve(address spender,uint256 amount) returns (bool)",
+]);
+const gateAbi = parseAbi([
   "function deposit((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 cm,uint256 q,bytes memo)",
 ]);
 
@@ -39,12 +44,54 @@ export interface ExternalDepositResult {
   logs: unknown[];
 }
 
+type ExternalDepositWrite = {
+  account: Address;
+  address: Address;
+  abi: typeof tokenAbi | typeof gateAbi;
+  functionName: "approve" | "deposit";
+  args: readonly unknown[];
+  chain: null;
+};
+
+export interface SubmitExternalDepositOptions {
+  account: Address;
+  deployment: Deployment;
+  input: ExternalDepositInput;
+  writeContract(parameters: ExternalDepositWrite): Promise<Hex>;
+  waitForReceipt(hash: Hex): Promise<{ status: string; blockNumber: bigint; logs: unknown[] }>;
+}
+
 export interface WalletGateway {
   sync(): Promise<ChainState>;
   logs(): Promise<unknown[]>;
   relay(action: "join" | "register" | "faucetDeposit" | "issue" | "transferBudget" | "registerState", args: Record<string, unknown>): Promise<RelayResult>;
   registryDomain(): Promise<bigint>;
+  registryLeaf(nf: bigint): Promise<bigint>;
   externalDeposit(input: ExternalDepositInput): Promise<ExternalDepositResult>;
+}
+
+export async function submitExternalDeposit(options: SubmitExternalDepositOptions): Promise<ExternalDepositResult> {
+  const approveHash = await options.writeContract({
+    account: options.account,
+    address: options.deployment.token,
+    abi: tokenAbi,
+    functionName: "approve",
+    args: [options.deployment.gate, options.input.q],
+    chain: null,
+  });
+  await options.waitForReceipt(approveHash);
+  const depositHash = await options.writeContract({
+    account: options.account,
+    address: options.deployment.gate,
+    abi: gateAbi,
+    functionName: "deposit",
+    args: [options.input.proof, options.input.cm, options.input.q, memoHex(options.input.memo)],
+    chain: null,
+  });
+  const receipt = await options.waitForReceipt(depositHash);
+  if (receipt.status !== "success") throw new Error("external deposit transaction reverted");
+  assertMemoInLogs(receipt.logs, options.input.note, options.input.memo);
+  return { transaction: depositHash, blockNumber: receipt.blockNumber, logs: receipt.logs };
 }
 
 export async function waitForChainState(
@@ -52,8 +99,8 @@ export async function waitForChainState(
   predicate: (state: ChainState) => boolean,
   options: { attempts?: number; delayMs?: number } = {},
 ): Promise<ChainState> {
-  const attempts = options.attempts ?? 20;
-  const delayMs = options.delayMs ?? 250;
+  const attempts = options.attempts ?? 80;
+  const delayMs = options.delayMs ?? 750;
   let state = await gateway.sync();
   for (let attempt = 1; attempt < attempts && !predicate(state); attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -114,6 +161,15 @@ export class BrowserWalletGateway implements WalletGateway {
     });
   }
 
+  async registryLeaf(nf: bigint): Promise<bigint> {
+    return this.publicClient.readContract({
+      address: this.config.deployment.registry,
+      abi: registryAbi,
+      functionName: "leafOfNullifier",
+      args: [nf],
+    });
+  }
+
   async relay(action: Parameters<WalletGateway["relay"]>[0], args: Record<string, unknown>): Promise<RelayResult> {
     const response = await fetch(`${this.config.facilitatorUrl}/relay/${action}`, {
       method: "POST",
@@ -143,27 +199,13 @@ export class BrowserWalletGateway implements WalletGateway {
     if (chainId !== this.config.deployment.chainId) {
       await walletClient.switchChain({ id: this.config.deployment.chainId });
     }
-    const approveHash = await walletClient.writeContract({
-      account,
-      address: this.config.deployment.token as Address,
-      abi: tokenAbi,
-      functionName: "approve",
-      args: [this.config.deployment.gate as Address, input.q],
-      chain: null,
+    return submitExternalDeposit({
+      account: account as Address,
+      deployment: this.config.deployment,
+      input,
+      writeContract: (parameters) => walletClient.writeContract(parameters as any),
+      waitForReceipt: (hash) => this.publicClient.waitForTransactionReceipt({ hash }),
     });
-    await this.publicClient.waitForTransactionReceipt({ hash: approveHash });
-    const depositHash = await walletClient.writeContract({
-      account,
-      address: this.config.deployment.token as Address,
-      abi: tokenAbi,
-      functionName: "deposit",
-      args: [input.proof as any, input.cm, input.q, memoHex(input.memo)],
-      chain: null,
-    });
-    const receipt = await this.publicClient.waitForTransactionReceipt({ hash: depositHash });
-    if (receipt.status !== "success") throw new Error("external deposit transaction reverted");
-    assertMemoInLogs(receipt.logs, input.note, input.memo);
-    return { transaction: depositHash, blockNumber: receipt.blockNumber, logs: receipt.logs };
   }
 }
 

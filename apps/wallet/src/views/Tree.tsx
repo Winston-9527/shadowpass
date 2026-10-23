@@ -38,8 +38,8 @@ function noteFromCard(card: CardRecord): Note | null {
 function spentForCard(card: CardRecord, bills: BillEntry[]): bigint {
   return bills.reduce((sum, bill) => {
     if (!bill.chain || bill.amount === undefined) return sum;
-    const holder = bill.chain.at(-1);
-    return holder?.x === BigInt(card.agentPk.x) && holder.y === BigInt(card.agentPk.y) ? sum + bill.amount : sum;
+    const belongsToBranch = bill.chain.some((holder) => holder.x === BigInt(card.agentPk.x) && holder.y === BigInt(card.agentPk.y));
+    return belongsToBranch ? sum + bill.amount : sum;
   }, 0n);
 }
 
@@ -60,6 +60,7 @@ export function buildAuthorizationTree(
       lin: entry.note.lin.map(BigInt) as Note["lin"],
       rho: BigInt(entry.note.rho),
     }))
+    .filter((note) => note.own[0] === bundle.steward.Ax && note.own[1] === bundle.steward.Ay)
     .filter((note) => note.lin[0] === rootHash)
     .filter((note) => state.notes.indexOf(noteCm(note)) >= 0)
     .filter((note) => !state.spentNullifiers.has(budgetNullifier(bundle.steward.sk, note).toString()))

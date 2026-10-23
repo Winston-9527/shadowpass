@@ -22,6 +22,12 @@ export interface StoredNote {
   createdAt: string;
 }
 
+export interface CredentialDelivery {
+  type: "credential";
+  pair: string;
+  bundle: CertificateBundle;
+}
+
 export interface CardRecord {
   id: string;
   name: string;
@@ -36,6 +42,9 @@ export interface CardRecord {
   issueTx: string;
   transferTx?: string;
   mailboxId?: number;
+  delivery?: CredentialDelivery;
+  ownerSeq?: number;
+  ownerVersion?: string;
   timings: { proofMs: number; chainMs: number; totalMs: number };
   createdAt: string;
 }
@@ -48,17 +57,26 @@ export interface WalletLedger {
   root: CertificateBundle["chain"][number] | null;
   registrationTx?: string;
   onboardedAt?: string;
+  rootRegistered?: boolean;
+  ownerRootSeq?: number;
+  ownerRootVersion?: string;
+  nextOwnerSeq?: number;
   notes: StoredNote[];
   cards: CardRecord[];
   updatedAt: string;
 }
 
-export interface OwnerSnapshot {
-  type: "owner_snapshot";
-  v: 1;
-  exportedAt: string;
-  root: CertificateBundle["chain"][number];
-  cards: CardRecord[];
+export interface OwnerRootRecord {
+  type: "owner_root";
+  seq: number;
+  cert0: CertificateBundle["chain"][number];
+}
+
+export interface OwnerCardRecord {
+  type: "owner_card";
+  seq: number;
+  cardId: string;
+  card: Omit<CardRecord, "boxPk"> & { agentBox: string };
 }
 
 export interface RelayResult {

@@ -2,12 +2,22 @@ import {
   groupCommitment,
   issueRoot,
   registerInput,
+  verifyBundleCert,
+  type Cert,
   type KeySet,
 } from "@shadowpass/sdk";
 import { serializeCert } from "./cert";
 import { waitForChainState, type WalletGateway } from "./chain";
 import type { ProofService } from "./prove";
 import type { ProgressReporter, WalletLedger } from "./types";
+
+const DAY_SECONDS = 24n * 60n * 60n;
+export const ROOT_VALIDITY_SECONDS = 31n * DAY_SECONDS;
+
+/** Stable within a UTC day so retrying onboarding after a lost tab derives the same cert0. */
+export function rootExpiryFor(now: bigint): bigint {
+  return (now / DAY_SECONDS) * DAY_SECONDS + ROOT_VALIDITY_SECONDS;
+}
 
 export interface OnboardOptions {
   ledger: WalletLedger;
@@ -17,6 +27,7 @@ export interface OnboardOptions {
   onCheckpoint?(ledger: WalletLedger): Promise<void>;
   progress?: ProgressReporter;
   nowSeconds?: bigint;
+  forceReplace?: boolean;
 }
 
 export interface OnboardResult {
@@ -41,11 +52,15 @@ export async function onboard(options: OnboardOptions): Promise<OnboardResult> {
     joinMs = performance.now() - started;
   }
 
-  const cert0 = issueRoot(
+  const storedRoot = ledger.root && validRoot(ledger.root, options.bundle) ? rootToCert(ledger.root, options.bundle) : null;
+  const canKeepStored = storedRoot
+    && storedRoot.expiry > now + 60n
+    && !options.forceReplace;
+  const cert0 = canKeepStored ? storedRoot : issueRoot(
     options.bundle.sign,
     options.bundle.steward,
     3n,
-    now + 7n * 24n * 60n * 60n,
+    rootExpiryFor(now) + (options.forceReplace ? DAY_SECONDS : 0n),
     options.bundle.view.vpk,
     options.bundle.view.w,
   );
@@ -55,13 +70,29 @@ export async function onboard(options: OnboardOptions): Promise<OnboardResult> {
   let chainMs = 0;
 
   if (state.rootTree.indexOf(cert0.hash) < 0) {
+    if (ledger.root?.hash !== root.hash) registrationTx = undefined;
+    ledger = {
+      ...ledger,
+      root,
+      registrationTx,
+      rootRegistered: false,
+      updatedAt: new Date().toISOString(),
+    };
+    await options.onCheckpoint?.(ledger);
     options.progress?.("Generating registration proof");
     const domain = await options.gateway.registryDomain();
     const input = registerInput({ human: options.bundle.sign, cert0, domain, state });
     const proof = await options.proofs.prove("main_reg", input);
     const proofMs = performance.now() - proofStarted;
-    const siblings = input.siblings;
-    if (!Array.isArray(siblings)) throw new Error("registration witness is missing group siblings");
+    const nf = BigInt(proof.publicSignals[2]!);
+    const oldLeaf = await options.gateway.registryLeaf(nf);
+    let siblingNodes: string[] = [];
+    if (oldLeaf !== 0n && oldLeaf !== cert0.hash) {
+      if (state.rootTree.indexOf(oldLeaf) < 0) {
+        throw new Error("previous root certificate is not visible on-chain");
+      }
+      siblingNodes = state.rootTree.proof(oldLeaf).siblings.map(String);
+    }
     options.progress?.("Registering root certificate");
     const chainStarted = performance.now();
     const receipt = await options.gateway.relay("register", {
@@ -69,7 +100,7 @@ export async function onboard(options: OnboardOptions): Promise<OnboardResult> {
       groupRoot: proof.publicSignals[0]!,
       nf: proof.publicSignals[2]!,
       leaf0: proof.publicSignals[3]!,
-      siblingNodes: siblings.map(String),
+      siblingNodes,
     });
     registrationTx = receipt.transaction;
     state = await waitForChainState(options.gateway, (candidate) => candidate.rootTree.indexOf(cert0.hash) >= 0);
@@ -79,6 +110,7 @@ export async function onboard(options: OnboardOptions): Promise<OnboardResult> {
       ...ledger,
       root,
       registrationTx,
+      rootRegistered: true,
       onboardedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -93,6 +125,7 @@ export async function onboard(options: OnboardOptions): Promise<OnboardResult> {
     ...ledger,
     root,
     registrationTx,
+    rootRegistered: true,
     onboardedAt: ledger.onboardedAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -100,5 +133,29 @@ export async function onboard(options: OnboardOptions): Promise<OnboardResult> {
   return {
     ledger,
     timings: { joinMs, proofMs: 0, chainMs: 0, totalMs: performance.now() - totalStarted },
+  };
+}
+
+function validRoot(root: WalletLedger["root"], bundle: KeySet): root is NonNullable<WalletLedger["root"]> {
+  if (!root || root.hop !== 0 || !verifyBundleCert(root)) return false;
+  return root.issuer.x === bundle.sign.Ax.toString()
+    && root.issuer.y === bundle.sign.Ay.toString()
+    && root.holder.x === bundle.steward.Ax.toString()
+    && root.holder.y === bundle.steward.Ay.toString()
+    && root.vpk?.x === bundle.view.vpk.x.toString()
+    && root.vpk.y === bundle.view.vpk.y.toString();
+}
+
+function rootToCert(root: NonNullable<WalletLedger["root"]>, bundle: KeySet): Cert {
+  return {
+    hop: 0,
+    issuer: bundle.sign,
+    holder: bundle.steward,
+    cap: BigInt(root.cap),
+    expiry: BigInt(root.expiry),
+    sig: { S: BigInt(root.sig.S), R8x: BigInt(root.sig.R8x), R8y: BigInt(root.sig.R8y) },
+    vpk: root.vpk ? { x: BigInt(root.vpk.x), y: BigInt(root.vpk.y) } : undefined,
+    ownW: root.ownW ? { x: BigInt(root.ownW.x), y: BigInt(root.ownW.y) } : undefined,
+    hash: BigInt(root.hash),
   };
 }

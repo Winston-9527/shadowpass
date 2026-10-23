@@ -233,13 +233,23 @@ try {
   await enabledOnlyPage.getByRole("dialog").waitFor();
   await enabledOnlyContext.close();
 
+  const configFailureContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  await configFailureContext.addInitScript(installMockCredential, "direct");
+  const configFailurePage = await configFailureContext.newPage();
+  await configFailurePage.route("**/deployments/anvil.json", (route) => route.abort());
+  await configFailurePage.goto(url);
+  await configFailurePage.getByTestId("create-wallet").click();
+  await configFailurePage.getByRole("dialog").waitFor();
+  await configFailurePage.getByText(/Wallet access is available, but chain controls are unavailable/).waitFor();
+  await configFailureContext.close();
+
   console.log(JSON.stringify({
     ok: true,
     url,
     previewHeaders: { csp },
     mailbox: process.env.VITE_MAILBOX_URL,
     screenshots: ["wallet-recovery.png", "wallet-unlocked.png", "wallet-pairing.png", "wallet-mobile.png", "wallet-prf-unavailable.png", "wallet-prf-unsupported.png"],
-    checks: ["production CSP + WebAssembly", "registration returns PRF directly", "enabled-only registration with targeted PRF login", "create", "passkey unlock", "second passkey with distinct PRF", "synced passkey slot", "recovery slot in new browser with pagination", "pairing URL and pairing code", "mobile overflow", "no WebAuthn", "authenticator without PRF"],
+    checks: ["production CSP + WebAssembly", "registration returns PRF directly", "enabled-only registration with targeted PRF login", "create", "passkey unlock", "second passkey with distinct PRF", "synced passkey slot", "recovery slot in new browser with pagination", "pairing URL and pairing code", "mobile overflow", "no WebAuthn", "authenticator without PRF", "passkey remains usable when deployment config fails"],
   }, null, 2));
 } finally {
   await browser.close();

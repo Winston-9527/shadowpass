@@ -148,10 +148,16 @@ try {
 
     const depositStarted = Date.now();
     await page.getByRole("button", { name: "100 USDC", exact: true }).click();
-    await page.waitForFunction(() => {
-      const value = document.querySelector(".wallet-toolbar .metric strong")?.textContent ?? "";
-      return value.startsWith("100");
-    }, undefined, { timeout: 30_000 });
+    try {
+      await page.waitForFunction(() => {
+        const value = document.querySelector(".wallet-toolbar .metric strong")?.textContent ?? "";
+        return value.startsWith("100");
+      }, undefined, { timeout: 30_000 });
+    } catch (error) {
+      await page.screenshot({ path: path.join(outputDir, "wallet-browser-chain-failure.png"), fullPage: true });
+      process.stderr.write(`[browser deposit] ${(await page.locator("body").innerText()).slice(0, 2000)}\n`);
+      throw error;
+    }
     const depositMs = Date.now() - depositStarted;
     await page.screenshot({ path: path.join(outputDir, "wallet-funded-100.png"), fullPage: true });
 

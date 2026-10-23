@@ -1,6 +1,6 @@
 # ShadowPass Wallet
 
-用户端 PWA（#10、#11）。主演示环境为 Mac Chrome + Google 密码管理器 + Touch ID，Safari 为备用；链上流程可在 Anvil 或 Base Sepolia 运行。
+用户端 PWA（#10、#11）。主演示环境为 Mac Chrome + Google 密码管理器 + Touch ID，Safari 为备用；链上流程已在 Anvil 验收，Base Sepolia 部署接线待后续工单。
 
 ## 开发
 
@@ -18,7 +18,7 @@ SHADOWPASS_NETWORK=anvil \
 ANVIL_RPC_URL=http://127.0.0.1:8545 \
 RELAY_FAUCET_PER_DAY=100 \
 RELAY_RATE_LIMIT=1000 \
-npm run start -w @shadowpass/facilitator
+node --import tsx services/facilitator/src/main.ts
 
 # terminal 3
 npm run dev:mailbox -w @shadowpass/wallet
@@ -46,7 +46,7 @@ Vercel 项目 Root Directory 设为 `apps/wallet`，仓库内 `vercel.json` 会�
 | `VITE_NETWORK` | `anvil` | `anvil` 或 `base-sepolia`，决定读取哪个 deployment |
 | `VITE_DEPLOYMENT_URL` | `/deployments/<network>.json` | 可覆盖 deployment JSON 地址 |
 | `VITE_RPC_URL` | `http://127.0.0.1:8545` | Anvil RPC；Base Sepolia 使用 `https://sepolia.base.org` |
-| `VITE_MAILBOX_URL` | deployment 中的 `mailbox` | 凭证和恢复快照信箱，必须配置 |
+| `VITE_MAILBOX_URL` | deployment 中的 `mailbox` | 凭证和主人卡片记录信箱，必须配置 |
 | `VITE_FACILITATOR_URL` | Anvil 为 `/facilitator` | facilitator 的 x402/relay 基础地址 |
 | `VITE_ARTIFACTS_URL` | `/zk/circuits-v2` | wasm、zkey、vk 和 MANIFEST 的位置 |
 
@@ -70,13 +70,14 @@ VITE_MAILBOX_URL=http://localhost:8787
 
 ## 开通、充值与发卡
 
-1. 创建 passkey 后，钱包依次调用 facilitator 的 `join`、在浏览器生成 `main_reg` 证明并调用 `register`，得到七天内有效的根证书。
+1. 创建 passkey 后，钱包依次调用 facilitator 的 `join`、在浏览器生成 `main_reg` 证明并调用 `register`，得到约 31 天有效的根证书。根证书有效期按 UTC 天稳定生成，注册前先写入本地；临近过期时可在钱包中续期并原位替换根叶子。
 2. 入金支持两条路：
    - 一键领取固定 10 / 50 / 100，浏览器生成 `budget_mint` 证明，facilitator 代付 `faucetDeposit`。
-   - MetaMask 等 EIP-1193 钱包连接 Anvil，本地生成 `budget_mint` 证明，外部钱包发送 `approve` 和 `deposit`。
+   - MetaMask 等 EIP-1193 钱包连接 Anvil，本地生成 `budget_mint` 证明，外部钱包先向 token 发送 `approve`，再向 `Gate.deposit` 提交证明和密文备忘。
 3. 发卡可粘贴配对码，也可打开 `/pair#<code>`。每张卡签发 cert1、上链 `issue`、生成 `budget_transfer` 证明并上链转移预算。
 4. 给 Agent 的票据用 Agent 的信箱公钥加密，管家找零票据用主人信箱公钥加密。交易回执中的 `NoteMemo` 必须与本地密文一致。
-5. 授权树显示主人、管家和两张 Agent 卡的能力、额度、剩余、有效期与状态。恢复时从 `/slot` 取回种子，扫描 `NoteMemo` 重建票据。
+5. 授权树显示主人、管家和各 Agent 卡的能力、额度、剩余、有效期与状态。恢复时从 `/slot` 取回种子，先扫描 `NoteMemo` 重建票据，再按 `cardId` 合并逐卡 `owner_card` 记录；记录必须通过签名、根关系和链上 `Issued` 事件核对。
+6. 凭证投递失败时卡片保留 `pending_delivery` 和完整加密凭证包，重试只重投原包，不重复发卡或转账；发卡和投递均使用跨标签页 Web Locks。
 
 Anvil 的 `faucetDeposit` 是整个代币合约每天一次，不是每个钱包一次。重复跑真实链 E2E 前要重启 `npm run dev:chain`，否则第二次会触发 faucet 限额。
 
@@ -111,13 +112,18 @@ npm run e2e:chain -w @shadowpass/wallet
 npm run e2e:browser-chain -w @shadowpass/wallet
 ```
 
-`e2e:chain` 直接调用钱包 flows，覆盖开通、100 入金、PAY 40、TREASURY 50、信箱凭证同步、`wallet_status` 和恢复快照。`e2e:browser-chain` 在 Chrome、生产构建和 Vite preview 中重复同一流程，并检查授权树和 IndexedDB 中的 issue/transfer 哈希。两者使用 PRF 替身，不替代真实 Touch ID 的录屏验收。
+`e2e:chain` 直接调用钱包 flows，覆盖开通、100 入金、PAY 40、TREASURY 50、信箱凭证同步、`wallet_status` 和逐卡主人记录恢复。`e2e:browser-chain` 在 Chrome、生产构建和 Vite preview 中重复同一流程，并检查授权树和 IndexedDB 中的 issue/transfer 哈希。两者使用 PRF 替身，不替代真实 Touch ID 的录屏验收。
 
 真实 Touch ID 仍需人工验收：
 
-1. Safari 打开 `http://localhost:5173`，用 Touch ID 创建，记录 macOS/Safari 版本和截图。
-2. 锁定后用同一 passkey 解锁，确认签名钥指纹不变。
-3. 在 Chrome 重复一次，记录 PRF 是否可用。
-4. 清空站点数据后使用恢复码，确认公钥一致。
+1. Chrome 打开 `http://localhost:5173`，使用 Google 密码管理器的 passkey 和 Touch ID 创建钱包，记录浏览器与 macOS 版本。
+2. 锁定后用同一 passkey 解锁，确认签名钥指纹不变；再刷新页面确认卡片和余额仍在。
+3. 在全新 Chrome 配置文件里分别用恢复码和同步 passkey 恢复，确认授权树和余额一致并录屏。
+4. 真实走完开通、100 入金、配对发卡、MetaMask 入金、断网重投和双标签页并发发卡。
 
-#11 的真实设备恢复录屏仍需人工补充。自动化已经验证恢复后的卡片数量和管家余额，但没有把该过程声称为真机录屏。
+2026-10-23 已在 Chrome 155.0.8059.85（arm64）/ macOS 26.4 + Google 密码管理器上由用户实测 passkey 注册成功，登录时 PRF 可用。该证据不覆盖 #11 的发卡、MetaMask 入金、断网重投或恢复录屏，这些仍待人工验收。
+
+## 已知部署边界
+
+- 本轮完成的是 Anvil 真链验收。Base Sepolia 的 facilitator CORS、Vercel `/facilitator` 代理和生产证明产物分发尚未接通，转后续部署工单处理。
+- deployment 配置加载失败时只禁用链上控制台；passkey 创建、解锁、同步 passkey 和恢复码恢复仍可使用。

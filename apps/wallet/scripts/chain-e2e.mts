@@ -26,7 +26,7 @@ import { deposit } from "../src/flows/deposit.js";
 import { availableStewardBudget, issueCard } from "../src/flows/issue.js";
 import { onboard } from "../src/flows/onboard.js";
 import type { ProofService } from "../src/flows/prove.js";
-import { publishOwnerSnapshot, recoverNotes, restoreOwnerSnapshot } from "../src/flows/snapshot.js";
+import { publishOwnerRecords, recoverNotes, restoreOwnerRecords } from "../src/flows/snapshot.js";
 import { emptyLedger, type CalldataProof, type WalletLedger } from "../src/flows/types.js";
 import { bytesToHex } from "../src/lib/bytes.js";
 
@@ -142,7 +142,7 @@ try {
   ledger = funded.ledger;
 
   let state = await gateway.sync();
-  assert.equal(availableStewardBudget(ledger, state, bundle.steward.sk), 100_000_000n);
+  assert.equal(availableStewardBudget(ledger, state, bundle.steward), 100_000_000n);
 
   const now = BigInt(Math.floor(Date.now() / 1000));
   const payStarted = timer();
@@ -192,7 +192,7 @@ try {
   ledger = treasury.ledger;
 
   state = await gateway.sync();
-  assert.equal(availableStewardBudget(ledger, state, bundle.steward.sk), 10_000_000n);
+  assert.equal(availableStewardBudget(ledger, state, bundle.steward), 10_000_000n);
   assert.equal(pay.timings.chainMs >= 0, true);
   assert.equal(treasury.timings.chainMs >= 0, true);
 
@@ -209,12 +209,12 @@ try {
   assert.deepEqual(treasuryStatus.capabilities, ["TREASURY"]);
   assert.equal(treasuryStatus.remainingBudget, "50000000");
 
-  await publishOwnerSnapshot(mailbox, bundle, ledger);
+  await publishOwnerRecords(mailbox, bundle, ledger);
   const blank = emptyLedger(deployment.chainId, "anvil", bundle.sign.Ax);
-  const snapshot = await restoreOwnerSnapshot(mailbox, bundle, blank);
-  const recovered = await recoverNotes(snapshot, bundle, state);
+  const records = await restoreOwnerRecords(mailbox, bundle, state, blank);
+  const recovered = await recoverNotes(records, bundle, state);
   assert.equal(recovered.cards.length, 2);
-  assert.equal(availableStewardBudget(recovered, state, bundle.steward.sk), 10_000_000n);
+  assert.equal(availableStewardBudget(recovered, state, bundle.steward), 10_000_000n);
 
   assert.equal(checkpoint.some((entry) => entry.cards.some((card) => card.status === "pending_delivery")), true);
   assert.equal(ledger.notes.some((entry) => entry.kind === "change" && BigInt(entry.note.q) === 10_000_000n), true);

@@ -95,6 +95,7 @@ export function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [walletConfig, setWalletConfig] = useState<WalletConfig | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
   const sessionRef = useRef<WalletSession | null>(null);
 
   const keyRows = useMemo(() => session ? [
@@ -123,12 +124,22 @@ export function App() {
         setSupport({ status: "unsupported", reason: "Backup mailbox is not configured. Set VITE_MAILBOX_URL before creating a wallet." });
         return;
       }
-      const config = await loadWalletConfig();
       await refreshPasskeys();
       if (active) {
-        setWalletConfig(config);
         setSupport({ status: "ready" });
       }
+      void loadWalletConfig().then(
+        (config) => {
+          if (!active) return;
+          setConfigError(null);
+          setWalletConfig(config);
+        },
+        (cause) => {
+          if (!active) return;
+          setWalletConfig(null);
+          setConfigError(errorMessage(cause));
+        },
+      );
     })().catch((cause) => {
       if (active) setSupport({ status: "unsupported", reason: errorMessage(cause) });
     });
@@ -252,7 +263,7 @@ export function App() {
 
             {walletConfig
               ? <OwnerConsole session={session} config={walletConfig} />
-              : <section className="inline-error session-error" role="alert"><AlertTriangle size={16} />Wallet network configuration is unavailable.</section>}
+              : <section className="inline-error session-error" role="alert"><AlertTriangle size={16} />{configError ? `Wallet access is available, but chain controls are unavailable: ${configError}` : "Loading wallet network configuration."}</section>}
 
             <section className="keys-panel">
               <div className="section-heading">

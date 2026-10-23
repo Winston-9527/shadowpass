@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -11,6 +11,8 @@ import {
   LoaderCircle,
   Network,
   Plus,
+  RefreshCw,
+  ScanLine,
   Send,
   Shield,
   TreePine,
@@ -27,12 +29,13 @@ import type { WalletSession } from "../wallet/session";
 import { bytesToHex } from "../lib/bytes";
 import { BrowserWalletGateway, type WalletGateway } from "../flows/chain";
 import { deposit } from "../flows/deposit";
-import { issueCard } from "../flows/issue";
+import { deliverCardCredential, issueCard } from "../flows/issue";
+import { withCrossTabLock } from "../flows/lock";
 import { loadLedger, saveLedger } from "../flows/ledger";
 import { onboard } from "../flows/onboard";
 import { pairingCodeFromLocation, parsePairingCode } from "../flows/pairing";
 import { SnarkProofService, type ProofService } from "../flows/prove";
-import { publishOwnerSnapshot, recoverNotes, restoreOwnerSnapshot } from "../flows/snapshot";
+import { publishOwnerRecords, recoverNotes, restoreOwnerRecords } from "../flows/snapshot";
 import {
   capValue,
   formatAmount,
@@ -89,6 +92,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
   const [budgetInput, setBudgetInput] = useState("40");
   const [expiryDays, setExpiryDays] = useState("1");
   const [depositMethod, setDepositMethod] = useState<"faucet" | "external">("faucet");
+  const pairingScanInput = useRef<HTMLInputElement | null>(null);
 
   const gateway = useMemo(() => injectedGateway ?? new BrowserWalletGateway(config), [config, injectedGateway]);
   const proofs = useMemo(() => injectedProofs ?? new SnarkProofService(config.artifactsUrl), [config.artifactsUrl, injectedProofs]);
@@ -98,8 +102,8 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     [bills, chainState, ledger, session.bundle],
   );
   const maximumExpiryDays = ledger?.root
-    ? Math.max(1, Math.floor((Number(ledger.root.expiry) * 1_000 - Date.now()) / 86_400_000))
-    : 7;
+    ? Math.max(0, Math.floor((Number(ledger.root.expiry) * 1_000 - Date.now()) / 86_400_000))
+    : 0;
 
   const persist = async (next: WalletLedger) => {
     await saveLedger(next);
@@ -120,15 +124,21 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       setError(null);
       try {
         const base = await loadLedger(config.deployment.chainId, config.network, session.bundle.sign.Ax);
-        const snapshot = await restoreOwnerSnapshot(mailer, session.bundle, base);
-        const state = await gateway.sync();
-        const logs = await gateway.logs();
-        const restored = await recoverNotes(snapshot, session.bundle, state);
+        const [state, logs] = await Promise.all([gateway.sync(), gateway.logs()]);
+        let records = base;
+        let mailboxWarning: string | null = null;
+        try {
+          records = await restoreOwnerRecords(mailer, session.bundle, state, base);
+        } catch (cause) {
+          mailboxWarning = `Mailbox records are temporarily unavailable: ${errorMessage(cause)}`;
+        }
+        const restored = await recoverNotes(records, session.bundle, state);
         await saveLedger(restored);
         if (!active) return;
         setLedger(restored);
         setChainState(state);
         setBills(scanBill(state, logs, session.bundle.view.vsk));
+        if (mailboxWarning) setError(mailboxWarning);
       } catch (cause) {
         if (active) setError(errorMessage(cause));
       } finally {
@@ -155,16 +165,32 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
 
   const handleOnboard = () => run("onboard", async () => {
     if (!ledger) throw new Error("wallet ledger is not ready");
-    const result = await onboard({
+    const result = await withCrossTabLock(`shadowpass:onboard:${session.bundle.sign.Ax}`, () => onboard({
       ledger,
       bundle: session.bundle,
       gateway,
       proofs,
       onCheckpoint: persist,
       progress: setProgress,
-    });
-    await publishOwnerSnapshot(mailer, session.bundle, result.ledger);
-    await persist(result.ledger);
+    }));
+    const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
+    await persist(published);
+    await refresh();
+  });
+
+  const handleRenewRoot = () => run("onboard", async () => {
+    if (!ledger) throw new Error("wallet ledger is not ready");
+    const result = await withCrossTabLock(`shadowpass:onboard:${session.bundle.sign.Ax}`, () => onboard({
+      ledger,
+      bundle: session.bundle,
+      gateway,
+      proofs,
+      onCheckpoint: persist,
+      progress: setProgress,
+      forceReplace: true,
+    }));
+    const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
+    await persist(published);
     await refresh();
   });
 
@@ -184,15 +210,46 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     await refresh();
   });
 
-  const handleParsePairing = () => {
+  const acceptPairingInput = (value: string) => {
     setError(null);
     try {
-      const parsed = parsePairingCode(pairInput);
+      const parsed = parsePairingCode(value);
       setPairing(parsed);
       setBudgetInput(parsed.name.toLowerCase().includes("理财") ? "50" : "40");
       setCapability(parsed.name.toLowerCase().includes("理财") ? "TREASURY" : "PAY");
+      if (location.pathname.endsWith("/pair") && location.hash) {
+        history.replaceState(null, "", `${location.pathname}${location.search}`);
+      }
     } catch (cause) {
       setPairing(null);
+      setError(errorMessage(cause));
+    }
+  };
+
+  const handleParsePairing = () => acceptPairingInput(pairInput);
+
+  const handlePairingImage = async (file: File | undefined) => {
+    if (!file) return;
+    const Detector = (window as typeof window & { BarcodeDetector?: new (options: { formats: string[] }) => { detect(source: ImageBitmap): Promise<Array<{ rawValue: string }>> } }).BarcodeDetector;
+    if (!Detector) {
+      setError("QR scanning is not supported in this browser; paste the pairing code instead.");
+      return;
+    }
+    try {
+      const bitmap = await createImageBitmap(file);
+      try {
+        const [result] = await new Detector({ formats: ["qr_code"] }).detect(bitmap);
+        if (!result?.rawValue) throw new Error("The image does not contain a pairing QR code");
+        let scanned = result.rawValue;
+        if (scanned.includes("#")) {
+          try { scanned = new URL(scanned).hash.slice(1) || scanned; } catch { scanned = scanned.slice(scanned.indexOf("#") + 1); }
+        }
+        setPairInput(scanned);
+        acceptPairingInput(scanned);
+      } finally {
+        bitmap.close();
+      }
+    } catch (cause) {
       setError(errorMessage(cause));
     }
   };
@@ -204,7 +261,10 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     const days = Number(expiryDays);
     if (!Number.isSafeInteger(days) || days < 1 || days > 30) throw new Error("expiry must be between 1 and 30 days");
     const now = BigInt(Math.floor(Date.now() / 1000));
-    const result = await issueCard({
+    if (ledger.root && now + BigInt(days) * 86_400n > BigInt(ledger.root.expiry)) {
+      throw new Error("expiry exceeds the root certificate's remaining lifetime");
+    }
+    const result = await withCrossTabLock(`shadowpass:issue:${ledger.root?.hash ?? "pending"}`, () => issueCard({
       ledger,
       bundle: session.bundle,
       pairing: parsed,
@@ -217,11 +277,29 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       onCheckpoint: persist,
       progress: setProgress,
       nowSeconds: now,
-    });
-    await publishOwnerSnapshot(mailer, session.bundle, result.ledger);
-    await persist(result.ledger);
+    }));
+    const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
+    await persist(published);
     setPairing(null);
     setPairInput("");
+    if (location.pathname.endsWith("/pair") && location.hash) {
+      history.replaceState(null, "", `${location.pathname}${location.search}`);
+    }
+    await refresh();
+    if (result.deliveryError) throw new Error(`Card is safe on-chain, but credential delivery failed: ${result.deliveryError}`);
+  });
+
+  const handleRetryDelivery = (cardId: string) => run("issue", async () => {
+    if (!ledger) throw new Error("wallet ledger is not ready");
+    const delivered = await withCrossTabLock(`shadowpass:delivery:${cardId}`, () => deliverCardCredential({
+      ledger,
+      cardId,
+      mailer,
+      onCheckpoint: persist,
+      progress: setProgress,
+    }));
+    const published = await publishOwnerRecords(mailer, session.bundle, delivered.ledger, persist);
+    await persist(published);
     await refresh();
   });
 
@@ -234,7 +312,10 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
   }
 
   const availableBudget = tree?.stewardBudget ?? 0n;
-  const rootReady = Boolean(ledger.root);
+  const currentRoot = ledger.root;
+  const rootReady = Boolean(currentRoot && chainState && chainState.rootTree.indexOf(BigInt(currentRoot.hash)) >= 0);
+  const rootNeedsRenewal = rootReady && currentRoot && Number(currentRoot.expiry) * 1_000 - Date.now() < 7 * 86_400_000;
+  const expiryInvalid = Number(expiryDays) > maximumExpiryDays;
 
   return (
     <div className="owner-console">
@@ -288,19 +369,33 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
                     </button>
                   ))}
                 </div>
+                <div className="issue-note"><Clock3 size={15} /><span>Wait before issuing cards so deposits and card grants are less correlated.</span></div>
               </div>
+            )}
+            {rootNeedsRenewal && (
+              <button className="button secondary wide" onClick={handleRenewRoot} disabled={busy !== null || !chainState}>
+                {busy === "onboard" ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}
+                Renew root certificate
+              </button>
             )}
           </section>
 
           <section className="console-section card-summary">
             <div className="section-heading"><div><span className="eyebrow">Live cards</span><h2>Agent access</h2></div><span className="count-pill">{ledger.cards.length}</span></div>
-            {tree?.cards.length ? tree.cards.slice(0, 3).map((card) => (
-              <div className="compact-card" key={card.id}>
-                <span className={`status-dot ${card.status}`} />
-                <div><strong>{card.name}</strong><span>{card.status} / {formatAmount(card.remaining)} USDC</span></div>
-                <button className="icon-button" onClick={() => setTab("tree")} title="Open authorization tree" aria-label="Open authorization tree"><ChevronRight size={17} /></button>
-              </div>
-            )) : <div className="empty-state"><CreditCard size={20} /><span>No Agent cards</span></div>}
+            {tree?.cards.length ? tree.cards.map((card) => {
+              const pendingDelivery = ledger.cards.find((candidate) => candidate.id === card.id)?.status === "pending_delivery";
+              return (
+                <div className="compact-card" key={card.id}>
+                  <span className={`status-dot ${card.status}`} />
+                  <div><strong>{card.name}</strong><span>{pendingDelivery ? "pending delivery" : card.status} / {formatAmount(card.remaining)} USDC</span></div>
+                  {pendingDelivery ? (
+                    <button className="icon-button" onClick={() => handleRetryDelivery(card.id)} disabled={busy !== null} title="Retry credential delivery" aria-label="Retry credential delivery"><RefreshCw size={17} /></button>
+                  ) : (
+                    <button className="icon-button" onClick={() => setTab("tree")} title="Open authorization tree" aria-label="Open authorization tree"><ChevronRight size={17} /></button>
+                  )}
+                </div>
+              );
+            }) : <div className="empty-state"><CreditCard size={20} /><span>No Agent cards</span></div>}
           </section>
         </div>
       )}
@@ -310,7 +405,11 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
           <section className="console-section pairing-panel">
             <div className="section-heading"><div><span className="eyebrow">Pairing</span><h2>Agent link</h2></div><Send size={20} /></div>
             <label className="field"><span>Pairing code</span><textarea data-testid="pairing-code" value={pairInput} onChange={(event) => { setPairInput(event.target.value); setPairing(null); }} placeholder="Paste the MCP pairing code" rows={4} /></label>
-            <button className="button secondary" onClick={handleParsePairing} disabled={!pairInput.trim()}><ArrowRight size={16} />Read pairing</button>
+            <div className="pairing-actions">
+              <button className="button secondary" onClick={handleParsePairing} disabled={!pairInput.trim()}><ArrowRight size={16} />Read pairing</button>
+              <button className="icon-button" type="button" onClick={() => pairingScanInput.current?.click()} disabled={busy !== null} title="Scan pairing QR code" aria-label="Scan pairing QR code"><ScanLine size={18} /></button>
+              <input ref={pairingScanInput} type="file" accept="image/*" capture="environment" hidden onChange={(event) => { void handlePairingImage(event.target.files?.[0]); event.target.value = ""; }} />
+            </div>
             {pairing && (
               <div className="pairing-result">
                 <span className="complete-pill"><Check size={14} />Paired</span>
@@ -328,9 +427,9 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
             </div></fieldset>
             <div className="form-row">
               <label className="field"><span>Budget</span><input data-testid="card-budget" inputMode="decimal" value={budgetInput} onChange={(event) => setBudgetInput(event.target.value)} /></label>
-              <label className="field"><span>Expires</span><select value={expiryDays} onChange={(event) => setExpiryDays(event.target.value)}><option value="1">1 day</option><option value="7" disabled={maximumExpiryDays < 7}>7 days</option><option value="30" disabled={maximumExpiryDays < 30}>30 days</option></select></label>
+              <label className="field"><span>Expires</span><select value={expiryDays} onChange={(event) => setExpiryDays(event.target.value)}><option value="1" disabled={maximumExpiryDays < 1}>1 day</option><option value="7" disabled={maximumExpiryDays < 7}>7 days</option><option value="30" disabled={maximumExpiryDays < 30}>30 days</option></select></label>
             </div>
-            <button className="button primary wide" data-testid="issue-card" onClick={handleIssue} disabled={busy !== null || !pairing || !chainState || availableBudget <= 0n}>
+            <button className="button primary wide" data-testid="issue-card" onClick={handleIssue} disabled={busy !== null || !pairing || !chainState || availableBudget <= 0n || expiryInvalid}>
               {busy === "issue" ? <LoaderCircle className="spin" size={17} /> : <Plus size={17} />}
               Issue and deliver
             </button>
