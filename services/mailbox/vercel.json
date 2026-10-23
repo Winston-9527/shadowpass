@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "api/**/*.ts": {
+      "maxDuration": 10,
+      "runtime": "nodejs24.x"
+    }
+  },
+  "rewrites": [
+    { "source": "/box/:path*", "destination": "/api/box/:path*" },
+    { "source": "/slot/:path*", "destination": "/api/slot/:path*" },
+    { "source": "/health", "destination": "/api/health" }
+  ]
+}

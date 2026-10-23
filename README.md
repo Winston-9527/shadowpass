@@ -68,7 +68,7 @@ flowchart LR
 | `packages/mcp/` | Agent 端 MCP server：stdio、本地密钥、配对、凭证同步、状态与收据（#7 第 1 步） | 🚧 |
 | `services/facilitator/` | x402 facilitator + 钱包交易代付 | ⏳ |
 | `services/merchant-demo/` | 示例商家（官方 x402 中间件） | ⏳ |
-| `services/mailbox/` | 加密信箱 | ⏳ |
+| `services/mailbox/` | 加密信箱与备份槽（SQLite / Upstash） | 🚧 |
 | `apps/wallet/` | 用户钱包 PWA 骨架：passkey + PRF、SDK key 派生、备份槽 | 🚧 |
 | `deployments/` | 各网络合约地址 | ⏳ |
 | `spikes/` | 一次性实验及结论 | ✅ x402 自定义 scheme |

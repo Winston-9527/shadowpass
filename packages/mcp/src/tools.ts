@@ -158,7 +158,9 @@ export async function pay(context: McpToolContext, request: PaymentRequest): Pro
   if (!context.malicious) {
     try {
       if (!context.mailbox) throw new Error("mailbox client is unavailable");
-      await context.mailbox.send(bundle.owner.box, {
+      const ownerBox = Buffer.from(bundle.owner.box.replace(/^0x/, ""), "hex");
+      if (ownerBox.length !== 32) throw new Error("owner mailbox public key must be 32 bytes");
+      await context.mailbox.send(Uint8Array.from(ownerBox), {
         type: "receipt",
         budgetNf: result.budgetNf,
         tx: result.tx,

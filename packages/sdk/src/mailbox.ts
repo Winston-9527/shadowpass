@@ -1,5 +1,4 @@
 import sodium from "libsodium-wrappers";
-import { bytesToHex, hexToBytes } from "./crypto.js";
 import type { BoxKeyPair } from "./types.js";
 
 export interface MailboxEntry<T = unknown> {
@@ -15,8 +14,12 @@ export interface MailboxClientOptions {
   fetch?: typeof fetch;
 }
 
-function decodeHexKey(value: Uint8Array | string): Uint8Array {
-  const bytes = typeof value === "string" ? hexToBytes(value) : Uint8Array.from(value);
+function bytesToHex(bytes: Uint8Array): string {
+  return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function decodePublicKey(value: Uint8Array): Uint8Array {
+  const bytes = Uint8Array.from(value);
   if (bytes.length !== 32) throw new Error("mailbox public key must be 32 bytes");
   return bytes;
 }
@@ -42,9 +45,9 @@ export class MailboxClient {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
-  async send(toPk: Uint8Array | string, message: unknown): Promise<number> {
+  async send(toPk: Uint8Array, message: unknown): Promise<number> {
     await sodium.ready;
-    const publicKey = decodeHexKey(toPk);
+    const publicKey = decodePublicKey(toPk);
     const plaintext = typeof message === "string"
       ? new TextEncoder().encode(message)
       : message instanceof Uint8Array
@@ -64,7 +67,7 @@ export class MailboxClient {
 
   async poll<T = unknown>(keyPair: BoxKeyPair, after = 0): Promise<MailboxEntry<T>[]> {
     await sodium.ready;
-    const publicKey = decodeHexKey(keyPair.publicKey);
+    const publicKey = decodePublicKey(keyPair.publicKey);
     const response = await this.fetchImpl(
       `${this.baseUrl.replace(/\/$/, "")}/box/${bytesToHex(publicKey).slice(2)}?after=${encodeURIComponent(String(after))}`,
     );
