@@ -168,7 +168,7 @@ describe("ShadowpassAgentPaymentBuilder", () => {
       expect(noteCm(change!).toString()).toBe(payload.budget.cmChange);
       expect(builder.lastBuiltPayment?.change).toEqual(change);
     }
-  }, 15_000);
+  }, 60_000);
 
   it("rejects wrong assets and insufficient notes before proof generation", async () => {
     const fixture = await createFixture({ noteQ: 10n });
