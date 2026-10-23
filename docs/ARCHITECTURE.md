@@ -74,7 +74,7 @@ flowchart TD
 | `notes` | `encodeNoteMemo(note, recipientBoxPk)`、`decodeNoteMemo(memo, boxSk)`、`scanNotes(state, logs, { boxSk, holderSks })` | wallet、mcp |
 | `owner` | `encryptChain`、`openChain(ct, vsk)`、`scanBill(state, logs, vsk) -> BillEntry[]` | wallet |
 | `bundle` | `encodeBundle / decodeBundle`、`encodeMessage / decodeMessage`（receipt、delegated） | wallet、mcp |
-| `mailbox` | `class MailboxClient { send(toPk, msg) ; poll(kp, after) }` | wallet、mcp |
+| `mailbox` | `class MailboxClient { send(toPk, msg) ; poll(kp, after) ; pollAll(kp, after) }`、`MailboxEntry`（坏条目保留 id 并跳过） | wallet、mcp |
 
 在 #6 交付之前，其他工单可以先写调用方代码，用 mock 实现这些签名。签名有变化时，#6 必须同步更新本表。
 

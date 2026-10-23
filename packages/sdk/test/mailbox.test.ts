@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { bytesToHex } from "../src/crypto.js";
 import { deriveKeys } from "../src/keys.js";
 import { MailboxClient } from "../src/mailbox.js";
 
@@ -32,5 +33,18 @@ describe("MailboxClient", () => {
     expect(messages).toHaveLength(2);
     expect(messages[0]?.value).toEqual({ type: "receipt", amount: "1" });
     expect(messages[1]).toMatchObject({ id: 2, decoded: false });
+  });
+
+  it("accepts a validated hex public key", async () => {
+    const owner = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 1));
+    const publicKey = bytesToHex(owner.box.publicKey).slice(2);
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      expect(String(url)).toContain(`/box/${publicKey}`);
+      return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+    });
+    const client = new MailboxClient("https://mailbox.example", { fetch: fetchMock });
+    await expect(client.send(publicKey, "hex key")).resolves.toBe(1);
+    await expect(client.send(`0x${publicKey}`, "prefixed hex key")).resolves.toBe(1);
+    await expect(client.send("not-a-public-key", "bad")).rejects.toThrow("hex");
   });
 });

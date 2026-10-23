@@ -4,12 +4,27 @@
   "private": true,
   "type": "module",
   "description": "Encrypted mailbox service (issue #9)",
+  "engines": {
+    "node": ">=24"
+  },
   "exports": {
     ".": "./src/index.ts"
   },
   "scripts": {
+    "start": "tsx src/main.ts",
+    "dev": "tsx src/main.ts",
+    "e2e": "tsx scripts/e2e.ts",
+    "e2e:online": "tsx scripts/e2e-online.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests"
   },
-  "dependencies": {}
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@shadowpass/sdk": "*",
+    "@types/libsodium-wrappers": "0.7.14",
+    "libsodium-wrappers": "0.7.15",
+    "tsx": "4.23.15"
+  }
 }
