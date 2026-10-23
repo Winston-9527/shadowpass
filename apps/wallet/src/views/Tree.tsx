@@ -53,6 +53,7 @@ export function buildAuthorizationTree(
 ): AuthorizationTreeModel {
   const rootHash = ledger.root ? BigInt(ledger.root.hash) : 0n;
   const stewardKey = truncateKey(keyEntry(bundle.steward));
+  const ownerKey = truncateKey(keyEntry(bundle.sign));
   const stewardBudget = ledger.notes
     .filter((entry) => entry.kind === "deposit" || entry.kind === "change")
     .map((entry) => ({
@@ -68,7 +69,7 @@ export function buildAuthorizationTree(
     .reduce((sum, note) => sum + note.q, 0n);
   const cards = ledger.cards.map((card): AuthorizationCard => {
     const note = noteFromCard(card);
-    const revoked = cardIsRevoked(card, state) || state.revoked.has(stewardKey);
+    const revoked = cardIsRevoked(card, state) || state.revoked.has(stewardKey) || state.revoked.has(ownerKey);
     const expired = nowSeconds > BigInt(card.expiry);
     const pending = card.status !== "delivered" || !note || state.notes.indexOf(noteCm(note)) < 0;
     const spent = spentForCard(card, bills);

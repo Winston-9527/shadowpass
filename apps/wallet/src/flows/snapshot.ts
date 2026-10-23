@@ -20,22 +20,84 @@ export interface OwnerMailboxClient {
 type VerifiedOwnerCardRecord = Omit<OwnerCardRecord, "card"> & { card: CardRecord };
 
 const MAX_OWNER_SEQ_ADVANCE = 1_000;
+const OWNER_RECORD_INFO = "shadowpass/owner-record";
+const encoder = new TextEncoder();
+
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
+function canonicalJson(value: JsonValue | undefined): string {
+  if (value === undefined) return "null";
+  if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const entries = Object.keys(value)
+    .filter((key) => value[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key]!)}`);
+  return `{${entries.join(",")}}`;
+}
+
+function bytesToHex(value: Uint8Array): string {
+  return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function hexToBytes(value: string): Uint8Array | null {
+  if (!/^[0-9a-f]{64}$/i.test(value)) return null;
+  return Uint8Array.from(value.match(/.{2}/g) ?? [], (pair) => Number.parseInt(pair, 16));
+}
+
+async function ownerRecordKey(seed: Uint8Array): Promise<CryptoKey> {
+  const hkdfKey = await crypto.subtle.importKey("raw", seed as BufferSource, "HKDF", false, ["deriveBits"]);
+  const raw = await crypto.subtle.deriveBits({
+    name: "HKDF",
+    hash: "SHA-256",
+    salt: new Uint8Array() as BufferSource,
+    info: encoder.encode(OWNER_RECORD_INFO) as BufferSource,
+  }, hkdfKey, 256);
+  return crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+}
+
+function unsignedRecord(record: unknown): Record<string, JsonValue> {
+  if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("owner record must be an object");
+  const { mac: _mac, ...unsigned } = record as Record<string, JsonValue>;
+  return unsigned;
+}
+
+async function signOwnerRecord(key: CryptoKey, record: unknown): Promise<string> {
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(canonicalJson(unsignedRecord(record))) as BufferSource);
+  return bytesToHex(new Uint8Array(signature));
+}
+
+async function verifyOwnerRecord(key: CryptoKey, record: unknown): Promise<boolean> {
+  const mac = (record as { mac?: unknown } | null)?.mac;
+  if (typeof mac !== "string") return false;
+  const signature = hexToBytes(mac);
+  if (!signature) return false;
+  return crypto.subtle.verify("HMAC", key, signature as BufferSource, encoder.encode(canonicalJson(unsignedRecord(record))) as BufferSource);
+}
+
+/** Exported for deterministic tests and recovery tooling; the key never leaves memory. */
+export async function ownerRecordMac(seed: Uint8Array, record: unknown): Promise<string> {
+  return signOwnerRecord(await ownerRecordKey(seed), record);
+}
 
 function isHexScalar(value: unknown): value is string {
   return typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value);
 }
 
-function validRootRecord(value: unknown, bundle: KeySet, state: ChainState): OwnerRootRecord | null {
+async function validRootRecord(value: unknown, bundle: KeySet, state: ChainState, macKey: CryptoKey): Promise<OwnerRootRecord | null> {
   if (!value || typeof value !== "object") return null;
+  if (!await verifyOwnerRecord(macKey, value)) return null;
   const record = value as Partial<OwnerRootRecord>;
-  if (record.type !== "owner_root" || !Number.isSafeInteger(record.seq) || Number(record.seq) < 1 || !record.cert0) return null;
+  if (record.type !== "owner_root" || !Number.isSafeInteger(record.seq) || Number(record.seq) < 1 || !record.cert0 || typeof record.mac !== "string") return null;
   const cert0 = record.cert0;
   if (cert0.hop !== 0 || !verifyBundleCert(cert0) || !isHexScalar(cert0.hash)) return null;
   if (cert0.issuer.x !== bundle.sign.Ax.toString() || cert0.issuer.y !== bundle.sign.Ay.toString()) return null;
   if (cert0.holder.x !== bundle.steward.Ax.toString() || cert0.holder.y !== bundle.steward.Ay.toString()) return null;
   if (cert0.vpk?.x !== bundle.view.vpk.x.toString() || cert0.vpk.y !== bundle.view.vpk.y.toString()) return null;
   if (state.rootTree.indexOf(BigInt(cert0.hash)) < 0) return null;
-  return { type: "owner_root", seq: Number(record.seq), cert0 };
+  return { type: "owner_root", seq: Number(record.seq), cert0, mac: record.mac };
 }
 
 function validDelivery(card: CardRecord, value: unknown): CardRecord["delivery"] | undefined {
@@ -53,10 +115,16 @@ function validDelivery(card: CardRecord, value: unknown): CardRecord["delivery"]
   }
 }
 
-function validCardRecord(value: unknown, root: CertificateBundle["chain"][number], state: ChainState): VerifiedOwnerCardRecord | null {
+async function validCardRecord(
+  value: unknown,
+  root: CertificateBundle["chain"][number],
+  state: ChainState,
+  macKey: CryptoKey,
+): Promise<VerifiedOwnerCardRecord | null> {
   if (!value || typeof value !== "object") return null;
+  if (!await verifyOwnerRecord(macKey, value)) return null;
   const record = value as Partial<OwnerCardRecord>;
-  if (record.type !== "owner_card" || !Number.isSafeInteger(record.seq) || Number(record.seq) < 1) return null;
+  if (record.type !== "owner_card" || !Number.isSafeInteger(record.seq) || Number(record.seq) < 1 || typeof record.mac !== "string") return null;
   if (typeof record.cardId !== "string" || !record.card || typeof record.card !== "object") return null;
   const serializedCard = record.card;
   const cert = serializedCard.cert;
@@ -89,7 +157,25 @@ function validCardRecord(value: unknown, root: CertificateBundle["chain"][number
     ownerSeq: Number(record.seq),
     ownerVersion: undefined,
   };
-  return { type: "owner_card", seq: Number(record.seq), cardId: record.cardId, card: normalized };
+  return { type: "owner_card", seq: Number(record.seq), cardId: record.cardId, card: normalized, mac: record.mac };
+}
+
+function verifiedLocalCard(card: CardRecord, root: CertificateBundle["chain"][number], state: ChainState): boolean {
+  if (!card.note || card.cert.issuer.x !== root.holder.x || card.cert.issuer.y !== root.holder.y) return false;
+  try {
+    const note = {
+      own: [BigInt(card.note.own[0]), BigInt(card.note.own[1])] as [bigint, bigint],
+      q: BigInt(card.note.q),
+      lin: card.note.lin.map(BigInt) as [bigint, bigint, bigint, bigint],
+      rho: BigInt(card.note.rho),
+    };
+    return note.lin[0].toString() === root.hash
+      && note.lin[1].toString() === card.id
+      && state.issued.indexOf(BigInt(card.id)) >= 0
+      && state.notes.indexOf(noteCm(note)) >= 0;
+  } catch {
+    return false;
+  }
 }
 
 function cardVersion(card: CardRecord, rootHash: string): string {
@@ -120,13 +206,16 @@ export async function publishOwnerRecords(
 ): Promise<WalletLedger> {
   if (!input.root) throw new Error("cannot publish owner records without a root certificate");
   let ledger = structuredClone(input);
+  const macKey = await ownerRecordKey(bundle.seed);
   const currentRoot = ledger.root;
   if (!currentRoot) throw new Error("cannot publish owner records without a root certificate");
   let nextSeq = ledger.nextOwnerSeq ?? 1;
   const rootVersion = currentRoot.hash;
   if (ledger.ownerRootVersion !== rootVersion || !ledger.ownerRootSeq) {
     const seq = nextSeq++;
-    await mailbox.send(bundle.box.publicKey, { type: "owner_root", seq, cert0: currentRoot } satisfies OwnerRootRecord);
+    const unsigned = { type: "owner_root" as const, seq, cert0: currentRoot };
+    const record: OwnerRootRecord = { ...unsigned, mac: await signOwnerRecord(macKey, unsigned) };
+    await mailbox.send(bundle.box.publicKey, record);
     ledger = { ...ledger, ownerRootSeq: seq, ownerRootVersion: rootVersion, nextOwnerSeq: nextSeq, updatedAt: new Date().toISOString() };
     await onCheckpoint?.(ledger);
   }
@@ -135,7 +224,8 @@ export async function publishOwnerRecords(
     if (card.ownerVersion === version && card.ownerSeq) continue;
     const seq = nextSeq++;
     const { boxPk, ...storedCard } = card;
-    const record: OwnerCardRecord = { type: "owner_card", seq, cardId: card.id, card: { ...storedCard, agentBox: boxPk } };
+    const unsigned = { type: "owner_card" as const, seq, cardId: card.id, card: { ...storedCard, agentBox: boxPk } };
+    const record: OwnerCardRecord = { ...unsigned, mac: await signOwnerRecord(macKey, unsigned) };
     await mailbox.send(bundle.box.publicKey, record);
     ledger = {
       ...ledger,
@@ -157,6 +247,7 @@ export async function restoreOwnerRecords(
   input: WalletLedger,
 ): Promise<WalletLedger> {
   const entries = await mailbox.pollAll(bundle.box, 0);
+  const macKey = await ownerRecordKey(bundle.seed);
   const localSeqs = [input.ownerRootSeq, ...input.cards.map((card) => card.ownerSeq)]
     .filter((seq): seq is number => Number.isSafeInteger(seq) && Number(seq) > 0);
   let maxSeq = localSeqs.length ? Math.max(...localSeqs) : 0;
@@ -165,7 +256,7 @@ export async function restoreOwnerRecords(
     if (!entry.decoded) continue;
     const raw = entry.value;
     if (!raw || typeof raw !== "object") continue;
-    const rootCandidate = validRootRecord(raw, bundle, state);
+    const rootCandidate = await validRootRecord(raw, bundle, state, macKey);
     if (!rootCandidate || rootCandidate.seq > maxSeq + MAX_OWNER_SEQ_ADVANCE) continue;
     maxSeq = Math.max(maxSeq, rootCandidate.seq);
     if (!rootRecord || rootCandidate.seq > rootRecord.seq) rootRecord = rootCandidate;
@@ -176,7 +267,7 @@ export async function restoreOwnerRecords(
     const cardRecords = new Map<string, VerifiedOwnerCardRecord>();
     for (const entry of entries) {
       if (!entry.decoded) continue;
-      const card = validCardRecord(entry.value, root, state);
+      const card = await validCardRecord(entry.value, root, state, macKey);
       if (!card || card.seq > maxSeq + MAX_OWNER_SEQ_ADVANCE) continue;
       maxSeq = Math.max(maxSeq, card.seq);
       const previous = cardRecords.get(card.cardId);
@@ -185,7 +276,10 @@ export async function restoreOwnerRecords(
     for (const record of cardRecords.values()) {
       const local = cards.find((card) => card.id === record.cardId);
       if (!local || record.seq > (local.ownerSeq ?? -1)) {
-        cards = [...cards.filter((card) => card.id !== record.cardId), record.card];
+        const nextCard = local && verifiedLocalCard(local, root, state)
+          ? { ...local, name: record.card.name, status: record.card.status, ownerSeq: record.seq }
+          : record.card;
+        cards = [...cards.filter((card) => card.id !== record.cardId), nextCard];
       }
     }
   }

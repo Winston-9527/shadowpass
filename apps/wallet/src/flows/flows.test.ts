@@ -25,7 +25,9 @@ const TX_ISSUE = `0x${"34".repeat(32)}` as const;
 const TX_TRANSFER = `0x${"56".repeat(32)}` as const;
 
 class FakeProofs implements ProofService {
+  calls = 0;
   async prove(circuit: CircuitName, input: Record<string, unknown>): Promise<CalldataProof> {
+    this.calls += 1;
     return {
       a: ["1", "2"],
       b: [["3", "4"], ["5", "6"]],
@@ -43,6 +45,7 @@ class FakeGateway implements WalletGateway {
   transfers = 0;
   failTransferBeforeCommit = false;
   loseTransferResponseAfterCommit = false;
+  readonly failTransferReasons: string[] = [];
 
   async sync(): Promise<ChainState> {
     return this.state;
@@ -74,10 +77,7 @@ class FakeGateway implements WalletGateway {
       if (oldLeaf === 0n) {
         this.state.rootTree.insert(leaf);
       } else {
-        const index = this.state.rootTree.indexOf(oldLeaf);
-        const expected = this.state.rootTree.proof(oldLeaf).siblings.map(String);
-        if (JSON.stringify(args.siblingNodes) !== JSON.stringify(expected)) throw new Error("wrong replacement siblings");
-        this.state.rootTree.update(index, leaf);
+        throw new Error("wallet is already registered");
       }
       this.registryLeaves.set(String(args.nf), leaf);
     }
@@ -89,6 +89,8 @@ class FakeGateway implements WalletGateway {
     if (action === "issue") this.state.issued.insert(BigInt(String(args.certHash)));
     if (action === "transferBudget") {
       if (this.failTransferBeforeCommit) throw new Error("transfer response lost");
+      const simulatedFailure = this.failTransferReasons.shift();
+      if (simulatedFailure) throw new Error(simulatedFailure);
       this.transfers += 1;
       const cm1 = BigInt(String(args.cm1));
       const cm2 = BigInt(String(args.cm2));
@@ -114,6 +116,47 @@ async function ownerFixture(): Promise<{ bundle: KeySet; ledger: WalletLedger; r
   ledger.root = root;
   ledger.registrationTx = TX;
   return { bundle, ledger, root };
+}
+
+async function pendingTransferFixture(seedOffset = 76) {
+  const { bundle, ledger, root } = await ownerFixture();
+  const gateway = new FakeGateway();
+  gateway.state.rootTree.insert(BigInt(root!.hash));
+  gateway.failTransferBeforeCommit = true;
+  const depositNote = createNote(bundle.steward, 100_000_000n, [BigInt(root!.hash)]);
+  gateway.state.notes.insert(noteCm(depositNote));
+  ledger.notes.push({
+    note: {
+      own: depositNote.own.map(String) as [string, string],
+      q: depositNote.q.toString(),
+      lin: depositNote.lin.map(String) as WalletLedger["notes"][number]["note"]["lin"],
+      rho: depositNote.rho.toString(),
+    },
+    cm: noteCm(depositNote).toString(),
+    tx: TX,
+    kind: "deposit",
+    createdAt: new Date().toISOString(),
+  });
+  const agent = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + seedOffset));
+  const proofs = new FakeProofs();
+  const options = {
+    bundle,
+    pairing: { v: 1 as const, name: "采购 Agent", agentPk: { x: agent.sign.Ax, y: agent.sign.Ay }, boxPk: bytesHex(agent.box.publicKey), pair: "cc".repeat(16) },
+    capability: 1n,
+    budget: 40_000_000n,
+    expiry: 2_000_100_000n,
+    gateway,
+    proofs,
+    mailer: { async send() { return 1; } },
+    nowSeconds: 2_000_000_500n,
+  };
+  let checkpoint: WalletLedger | undefined;
+  await expect(issueCard({
+    ...options,
+    ledger,
+    onCheckpoint: async (next) => { checkpoint = structuredClone(next); },
+  })).rejects.toThrow(/response lost/);
+  return { ...options, checkpoint: checkpoint!, gateway, proofs };
 }
 
 describe("wallet opening and card flows", () => {
@@ -326,6 +369,62 @@ describe("wallet opening and card flows", () => {
     expect(result.ledger.notes.some((entry) => entry.kind === "change" && entry.note.q === "60000000")).toBe(true);
   });
 
+  it.each(["StaleRevokedRoot", "StaleNoteRoot"])("regenerates a pending proof after %s and keeps old outputs as candidates", async (relayError) => {
+    const fixture = await pendingTransferFixture(77);
+    const { checkpoint, ...options } = fixture;
+    const { gateway, proofs } = fixture;
+    const oldCm = checkpoint.pendingTransfer!.call.cm1;
+    const checkpoints: WalletLedger[] = [];
+    gateway.failTransferBeforeCommit = false;
+    gateway.failTransferReasons.push(`simulation_failed:${relayError}`);
+    const retried = await issueCard({
+      ...options,
+      ledger: checkpoint,
+      onCheckpoint: async (next) => { checkpoints.push(structuredClone(next)); },
+    });
+    expect(gateway.transfers).toBe(1);
+    expect(proofs.calls).toBe(2);
+    expect(checkpoints.some((next) => next.pendingTransfer?.candidates?.length === 2
+      && next.pendingTransfer.candidates.some((candidate) => candidate.call.cm1 === oldCm)
+      && next.pendingTransfer.call.cm1 !== oldCm)).toBe(true);
+    expect(retried.ledger.pendingTransfer).toBeUndefined();
+    expect(retried.ledger.cards[0]).toMatchObject({ status: "delivered", budget: "40000000" });
+  });
+
+  it("clears a pending transfer when its parent note was spent elsewhere", async () => {
+    const fixture = await pendingTransferFixture(78);
+    const { checkpoint, ...options } = fixture;
+    const { gateway } = fixture;
+    const parentCm = checkpoint.pendingTransfer!.parentCm;
+    const checkpoints: WalletLedger[] = [];
+    gateway.failTransferBeforeCommit = false;
+    gateway.failTransferReasons.push("simulation_failed:BudgetSpent");
+    await expect(issueCard({
+      ...options,
+      ledger: checkpoint,
+      onCheckpoint: async (next) => { checkpoints.push(structuredClone(next)); },
+    })).rejects.toThrow(/spent elsewhere/);
+    const cleared = checkpoints.at(-1)!;
+    expect(cleared.pendingTransfer).toBeUndefined();
+    expect(cleared.notes.some((entry) => entry.cm === parentCm)).toBe(false);
+    expect(gateway.transfers).toBe(0);
+  });
+
+  it("refuses to resume a pending card for a different pairing request", async () => {
+    const fixture = await pendingTransferFixture(79);
+    const { checkpoint, ...options } = fixture;
+    const { gateway } = fixture;
+    const other = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 120));
+    gateway.failTransferBeforeCommit = false;
+    await expect(issueCard({
+      ...options,
+      ledger: checkpoint,
+      pairing: { v: 1, name: "第二个 Agent", agentPk: { x: other.sign.Ax, y: other.sign.Ay }, boxPk: bytesHex(other.box.publicKey), pair: "dd".repeat(16) },
+      budget: 7_000_000n,
+    })).rejects.toThrow(/pending card for 采购 Agent/);
+    expect(gateway.transfers).toBe(0);
+  });
+
   it("recovers the registered cert0 on a later UTC day instead of replacing root lineage", async () => {
     const bundle = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 21));
     const gateway = new FakeGateway();
@@ -341,6 +440,20 @@ describe("wallet opening and card flows", () => {
     expect(recovered.ledger.root?.hash).toBe(opened.ledger.root?.hash);
     expect(recovered.ledger.rootRegistered).toBe(true);
     expect(gateway.state.rootTree.leaves).toHaveLength(1);
+  });
+
+  it("reports the fixed 31-day wallet lifetime when the recovered root has expired", async () => {
+    const bundle = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 22));
+    const gateway = new FakeGateway();
+    const opened = await onboard({ ledger: emptyLedger(31337, "anvil", bundle.sign.Ax), bundle, gateway, proofs: new FakeProofs(), nowSeconds: 2_000_000_000n });
+    await expect(onboard({
+      ledger: emptyLedger(31337, "anvil", bundle.sign.Ax),
+      bundle,
+      gateway,
+      proofs: new FakeProofs(),
+      nowSeconds: BigInt(opened.ledger.root!.expiry) + 1n,
+    })).rejects.toThrow(/root certificate has expired.*31 days/);
+    expect(gateway.registrations).toBe(1);
   });
 
   it("persists cert0 before registration so a timed-out transaction can be reconciled", async () => {

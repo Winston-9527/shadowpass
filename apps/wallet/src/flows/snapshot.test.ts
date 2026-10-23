@@ -13,7 +13,7 @@ import {
 } from "@shadowpass/sdk";
 import { serializeCert } from "./cert";
 import { emptyLedger, type CardRecord, type WalletLedger } from "./types";
-import { publishOwnerRecords, recoverNotes, restoreOwnerRecords } from "./snapshot";
+import { ownerRecordMac, publishOwnerRecords, recoverNotes, restoreOwnerRecords } from "./snapshot";
 import { buildAuthorizationTree } from "../views/Tree";
 
 class MemoryMailbox {
@@ -85,6 +85,7 @@ describe("owner records and note recovery", () => {
     expect(mailbox.messages.map((value) => (value as { type: string }).type)).toEqual(["owner_root", "owner_card"]);
     expect((mailbox.messages[1] as { card: Record<string, unknown> }).card).toMatchObject({ agentBox: card.boxPk });
     expect((mailbox.messages[1] as { card: Record<string, unknown> }).card).not.toHaveProperty("boxPk");
+    expect(mailbox.messages.every((value) => /^[0-9a-f]{64}$/.test((value as { mac: string }).mac))).toBe(true);
     expect(published.cards[0]?.ownerSeq).toBe(2);
 
     const restored = await restoreOwnerRecords(mailbox, owner, state, emptyLedger(31337, "anvil", owner.sign.Ax));
@@ -127,6 +128,58 @@ describe("owner records and note recovery", () => {
     const restored = await restoreOwnerRecords(mailbox, owner, state, ledger);
     expect(restored.nextOwnerSeq).toBe(3);
     expect(restored.cards[0]?.name).toBe("采购 Agent");
+  });
+
+  it("rejects card records with a missing or invalid owner-record MAC", async () => {
+    const { owner, ledger, state } = await fixture();
+    const mailbox = new MemoryMailbox();
+    await publishOwnerRecords(mailbox, owner, ledger);
+    const genuine = structuredClone(mailbox.messages[1]) as { type: "owner_card"; seq: number; cardId: string; card: Record<string, unknown>; mac: string };
+    mailbox.messages.push({ ...genuine, seq: 50, card: { ...genuine.card, name: "Forged" } });
+    mailbox.messages.push({ ...genuine, seq: 51, card: { ...genuine.card, name: "Forged again" }, mac: "00".repeat(32) });
+    const restored = await restoreOwnerRecords(mailbox, owner, state, ledger);
+    expect(restored.cards[0]?.name).toBe("采购 Agent");
+    expect(restored.nextOwnerSeq).toBe(3);
+  });
+
+  it("ignores an owner_root whose MAC does not match its contents", async () => {
+    const { owner, ledger, state } = await fixture();
+    const mailbox = new MemoryMailbox();
+    await publishOwnerRecords(mailbox, owner, ledger);
+    const rootRecord = structuredClone(mailbox.messages[0]) as { mac: string; cert0: { expiry: string } };
+    rootRecord.cert0.expiry = String(BigInt(rootRecord.cert0.expiry) + 1n);
+    mailbox.messages[0] = rootRecord;
+    const restored = await restoreOwnerRecords(mailbox, owner, state, emptyLedger(31337, "anvil", owner.sign.Ax));
+    expect(restored.root).toBeNull();
+    expect(restored.cards).toHaveLength(0);
+  });
+
+  it("only lets an authenticated newer record update name and status on a chain-verified card", async () => {
+    const { owner, ledger, state, card } = await fixture();
+    const mailbox = new MemoryMailbox();
+    await publishOwnerRecords(mailbox, owner, ledger);
+    const genuine = structuredClone(mailbox.messages[1]) as { type: "owner_card"; seq: number; cardId: string; card: Record<string, unknown> };
+    const unsigned = {
+      ...genuine,
+      seq: 10,
+      card: {
+        ...genuine.card,
+        name: "Attacker label",
+        agentBox: "ee".repeat(32),
+        status: "pending_delivery",
+      },
+    };
+    mailbox.messages.push({ ...unsigned, mac: await ownerRecordMac(owner.seed, unsigned) });
+    const restored = await restoreOwnerRecords(mailbox, owner, state, ledger);
+    expect(restored.cards[0]).toMatchObject({
+      name: "Attacker label",
+      status: "pending_delivery",
+      boxPk: card.boxPk,
+      budget: card.budget,
+      note: card.note,
+      ownerSeq: 10,
+    });
+    expect(restored.cards[0]?.delivery).toBe(card.delivery);
   });
 
   it("ignores forged cards that are not linked to the accepted root or Issued tree", async () => {

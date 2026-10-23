@@ -42,6 +42,7 @@ import {
   parseAmount,
   type Capability,
   type PairingPayload,
+  type PendingBudgetTransfer,
   type ProgressReporter,
   type WalletLedger,
 } from "../flows/types";
@@ -73,6 +74,18 @@ function errorMessage(error: unknown): string {
 
 function short(value: string, length = 14): string {
   return value.length > length ? `${value.slice(0, length)}...` : value;
+}
+
+function pendingPairing(pending: PendingBudgetTransfer): PairingPayload {
+  const pair = pending.card.delivery?.pair;
+  if (!pair) throw new Error("pending card is missing its pairing data");
+  return {
+    v: 1,
+    name: pending.card.name,
+    agentPk: { x: BigInt(pending.card.agentPk.x), y: BigInt(pending.card.agentPk.y) },
+    boxPk: pending.card.boxPk,
+    pair,
+  };
 }
 
 export function OwnerConsole({ session, config, gateway: injectedGateway, proofs: injectedProofs, mailer: injectedMailer }: OwnerConsoleProps) {
@@ -126,22 +139,25 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       setBusy("refresh");
       setError(null);
       try {
-        const base = await loadLedger(config.deployment.chainId, config.network, session.bundle.sign.Ax);
-        const [state, logs] = await Promise.all([gateway.sync(), gateway.logs()]);
-        let records = base;
-        let mailboxWarning: string | null = null;
-        try {
-          records = await restoreOwnerRecords(mailer, session.bundle, state, base);
-        } catch (cause) {
-          mailboxWarning = `Mailbox records are temporarily unavailable: ${errorMessage(cause)}`;
-        }
-        const restored = await recoverNotes(records, session.bundle, state);
-        await saveLedger(restored);
+        const mounted = await withCrossTabLock(walletLockName, async () => {
+          const base = await loadLedger(config.deployment.chainId, config.network, session.bundle.sign.Ax);
+          const [state, logs] = await Promise.all([gateway.sync(), gateway.logs()]);
+          let records = base;
+          let mailboxWarning: string | null = null;
+          try {
+            records = await restoreOwnerRecords(mailer, session.bundle, state, base);
+          } catch (cause) {
+            mailboxWarning = `Mailbox records are temporarily unavailable: ${errorMessage(cause)}`;
+          }
+          const restored = await recoverNotes(records, session.bundle, state);
+          await saveLedger(restored);
+          return { restored, state, logs, mailboxWarning };
+        });
         if (!active) return;
-        setLedger(restored);
-        setChainState(state);
-        setBills(scanBill(state, logs, session.bundle.view.vsk));
-        if (mailboxWarning) setError(mailboxWarning);
+        setLedger(mounted.restored);
+        setChainState(mounted.state);
+        setBills(scanBill(mounted.state, mounted.logs, session.bundle.view.vsk));
+        if (mounted.mailboxWarning) setError(mounted.mailboxWarning);
       } catch (cause) {
         if (active) setError(errorMessage(cause));
       } finally {
@@ -149,7 +165,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       }
     })();
     return () => { active = false; };
-  }, [config, gateway, mailer, session.bundle]);
+  }, [config, gateway, mailer, session.bundle, walletLockName]);
 
   const run = async (kind: Exclude<Busy, null>, action: () => Promise<void>) => {
     setBusy(kind);
@@ -254,6 +270,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     const days = Number(expiryDays);
     if (!Number.isSafeInteger(days) || days < 1 || days > 30) throw new Error("expiry must be between 1 and 30 days");
     let deliveryError: string | undefined;
+    let publishError: string | undefined;
     await withCrossTabLock(walletLockName, async () => {
       const current = await loadFreshLedger();
       const now = BigInt(Math.floor(Date.now() / 1000));
@@ -275,8 +292,13 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
         progress: setProgress,
         nowSeconds: now,
       });
-      const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
-      await persist(published);
+      await persist(result.ledger);
+      try {
+        const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
+        await persist(published);
+      } catch (cause) {
+        publishError = errorMessage(cause);
+      }
       deliveryError = result.deliveryError;
     });
     setPairing(null);
@@ -285,6 +307,41 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       history.replaceState(null, "", `${location.pathname}${location.search}`);
     }
     await refresh();
+    if (publishError) throw new Error(`Card is safe on-chain, but the owner recovery record could not be published: ${publishError}`);
+    if (deliveryError) throw new Error(`Card is safe on-chain, but credential delivery failed: ${deliveryError}`);
+  });
+
+  const handleResumePending = () => run("issue", async () => {
+    let deliveryError: string | undefined;
+    let publishError: string | undefined;
+    await withCrossTabLock(walletLockName, async () => {
+      const current = await loadFreshLedger();
+      const pending = current.pendingTransfer;
+      if (!pending) throw new Error("there is no pending card to resume");
+      const result = await issueCard({
+        ledger: current,
+        bundle: session.bundle,
+        pairing: pendingPairing(pending),
+        capability: BigInt(pending.card.cap),
+        budget: BigInt(pending.card.budget),
+        expiry: BigInt(pending.card.expiry),
+        gateway,
+        proofs,
+        mailer,
+        onCheckpoint: persist,
+        progress: setProgress,
+      });
+      await persist(result.ledger);
+      try {
+        const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
+        await persist(published);
+      } catch (cause) {
+        publishError = errorMessage(cause);
+      }
+      deliveryError = result.deliveryError;
+    });
+    await refresh();
+    if (publishError) throw new Error(`Card is safe on-chain, but the owner recovery record could not be published: ${publishError}`);
     if (deliveryError) throw new Error(`Card is safe on-chain, but credential delivery failed: ${deliveryError}`);
   });
 
@@ -299,8 +356,13 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
         onCheckpoint: persist,
         progress: setProgress,
       });
-      const published = await publishOwnerRecords(mailer, session.bundle, delivered.ledger, persist);
-      await persist(published);
+      await persist(delivered.ledger);
+      try {
+        const published = await publishOwnerRecords(mailer, session.bundle, delivered.ledger, persist);
+        await persist(published);
+      } catch (cause) {
+        throw new Error(`Credential was delivered, but the owner recovery record could not be published: ${errorMessage(cause)}`);
+      }
     });
     await refresh();
   });
@@ -315,6 +377,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
 
   const availableBudget = tree?.stewardBudget ?? 0n;
   const currentRoot = ledger.root;
+  const pendingTransfer = ledger.pendingTransfer;
   const rootReady = Boolean(currentRoot && chainState && chainState.rootTree.indexOf(BigInt(currentRoot.hash)) >= 0);
   const expiryInvalid = Number(expiryDays) > maximumExpiryDays;
 
@@ -376,7 +439,14 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
           </section>
 
           <section className="console-section card-summary">
-            <div className="section-heading"><div><span className="eyebrow">Live cards</span><h2>Agent access</h2></div><span className="count-pill">{ledger.cards.length}</span></div>
+            <div className="section-heading"><div><span className="eyebrow">Live cards</span><h2>Agent access</h2></div><span className="count-pill">{ledger.cards.length + (pendingTransfer ? 1 : 0)}</span></div>
+            {pendingTransfer && (
+              <div className="compact-card pending-transfer-card">
+                <span className="status-dot pending" />
+                <div><strong>{pendingTransfer.card.name}</strong><span>pending transfer / {formatAmount(BigInt(pendingTransfer.card.budget))} USDC</span></div>
+                <button className="icon-button" onClick={handleResumePending} disabled={busy !== null} title="Resume pending card" aria-label="Resume pending card"><RefreshCw size={17} /></button>
+              </div>
+            )}
             {tree?.cards.length ? tree.cards.map((card) => {
               const pendingDelivery = ledger.cards.find((candidate) => candidate.id === card.id)?.status === "pending_delivery";
               return (
@@ -416,6 +486,12 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
 
           <section className="console-section issue-form">
             <div className="section-heading"><div><span className="eyebrow">Policy</span><h2>Card limits</h2></div><span className="budget-source">{formatAmount(availableBudget)} USDC available</span></div>
+            {pendingTransfer && (
+              <div className="pending-transfer-notice" role="status">
+                <Clock3 size={16} />
+                <div><strong>{pendingTransfer.card.name}</strong><span>{formatAmount(BigInt(pendingTransfer.card.budget))} USDC is waiting for a budget transfer.</span></div>
+              </div>
+            )}
             <fieldset className="field-group"><legend>Capability</legend><div className="segmented capability-select">
               <button className={capability === "PAY" ? "active" : ""} onClick={() => setCapability("PAY")}><CreditCard size={16} />Pay</button>
               <button className={capability === "TREASURY" ? "active" : ""} onClick={() => setCapability("TREASURY")}><Landmark size={16} />Treasury</button>
@@ -424,9 +500,9 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
               <label className="field"><span>Budget</span><input data-testid="card-budget" inputMode="decimal" value={budgetInput} onChange={(event) => setBudgetInput(event.target.value)} /></label>
               <label className="field"><span>Expires</span><select value={expiryDays} onChange={(event) => setExpiryDays(event.target.value)}><option value="1" disabled={maximumExpiryDays < 1}>1 day</option><option value="7" disabled={maximumExpiryDays < 7}>7 days</option><option value="30" disabled={maximumExpiryDays < 30}>30 days</option></select></label>
             </div>
-            <button className="button primary wide" data-testid="issue-card" onClick={handleIssue} disabled={busy !== null || !pairing || !chainState || availableBudget <= 0n || expiryInvalid}>
-              {busy === "issue" ? <LoaderCircle className="spin" size={17} /> : <Plus size={17} />}
-              Issue and deliver
+            <button className="button primary wide" data-testid="issue-card" onClick={pendingTransfer ? handleResumePending : handleIssue} disabled={busy !== null || !chainState || (!pendingTransfer && (!pairing || availableBudget <= 0n || expiryInvalid))}>
+              {busy === "issue" ? <LoaderCircle className="spin" size={17} /> : pendingTransfer ? <RefreshCw size={17} /> : <Plus size={17} />}
+              {pendingTransfer ? "Resume pending card" : "Issue and deliver"}
             </button>
             <div className="issue-note"><Clock3 size={15} /><span>Credential delivery is encrypted end to end.</span></div>
           </section>

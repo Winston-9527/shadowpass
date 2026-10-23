@@ -27,9 +27,17 @@ async function withLocalStorageLock<T>(name: string, task: () => Promise<T>, tim
     if (Date.now() - started >= timeoutMs) throw new Error("another wallet tab is still using this budget ticket");
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  const renewEveryMs = Math.max(1_000, Math.floor(timeoutMs / 3));
+  const renew = () => {
+    if (localStorage.getItem(key)?.startsWith(`${token}:`)) {
+      localStorage.setItem(key, `${token}:${Date.now() + timeoutMs}`);
+    }
+  };
+  const heartbeat = setInterval(renew, renewEveryMs);
   try {
     return await task();
   } finally {
+    clearInterval(heartbeat);
     if (localStorage.getItem(key)?.startsWith(`${token}:`)) localStorage.removeItem(key);
   }
 }

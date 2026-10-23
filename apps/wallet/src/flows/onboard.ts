@@ -67,6 +67,9 @@ export async function onboard(options: OnboardOptions): Promise<OnboardResult> {
     ? (storedRoot?.hash === registeredLeaf ? storedRoot : recoverRegisteredRoot(options.bundle, registeredLeaf, now))
     : provisionalRoot;
   if (!cert0) throw new Error("wallet already has a registered root certificate that cannot be recovered; root rotation is not supported");
+  if (cert0.expiry <= now) {
+    throw new Error("wallet root certificate has expired; this MVP root is valid for 31 days and cannot be rotated yet");
+  }
   const root = serializeCert(cert0);
   const proofStarted = performance.now();
   let registrationTx = ledger.registrationTx;

@@ -60,12 +60,20 @@ export interface BudgetTransferCall {
   memo2: string;
 }
 
+export interface PendingBudgetCandidate {
+  call: BudgetTransferCall;
+  agentNote: CertificateBundle["note"];
+  changeNote: CertificateBundle["note"] | null;
+  transferTx?: string;
+}
+
 export interface PendingBudgetTransfer {
   parentCm: string;
   card: CardRecord;
   changeNote: CertificateBundle["note"] | null;
   call: BudgetTransferCall;
   hasChange: boolean;
+  candidates?: PendingBudgetCandidate[];
   createdAt: string;
 }
 
@@ -91,6 +99,7 @@ export interface OwnerRootRecord {
   type: "owner_root";
   seq: number;
   cert0: CertificateBundle["chain"][number];
+  mac: string;
 }
 
 export interface OwnerCardRecord {
@@ -98,6 +107,7 @@ export interface OwnerCardRecord {
   seq: number;
   cardId: string;
   card: Omit<CardRecord, "boxPk"> & { agentBox: string };
+  mac: string;
 }
 
 export interface RelayResult {
