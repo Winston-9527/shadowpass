@@ -154,6 +154,14 @@ MCP 在终端同时打印这个链接、同样内容的配对码（base64url 字
 }
 ```
 
+信箱里的消息都是 JSON，用 `type` 区分：
+```json
+{ "type": "credential", "pair": "<配对链接里的 pair，hex>", "bundle": { /* 上面的凭证包 */ } }
+{ "type": "delegated",  "parent": "<hash>", "cert": { } }
+{ "type": "receipt",    "budgetNf": "..", "tx": "..", "resource": "..", "amount": ".." }
+```
+`credential` 消息每次都带上 `pair`（第一次用于锁定主人，之后可忽略）。
+
 Agent 用 `delegate` 创建子 Agent 时，向主人信箱发送 `{"type": "delegated", "parent": "<hash>", "cert": {...}}`，主人钱包据此显示授权树，并用于祖先吊销（工单 A2）。每笔付款后发送 `{"type": "receipt", "budgetNf": "..", "tx": "..", "resource": "..", "amount": ".."}`。收据只用于展示，以链上解密为准。
 
 ## 8. x402 `shadowpass` scheme
