@@ -64,11 +64,22 @@ const names = [
 const topicToName = new Map<string, ShadowEventName>(
   signatures.map((signature, index) => [keccak256(toBytes(signature)).toLowerCase(), names[index]!]),
 );
+export const shadowEventTopics: readonly Hex[] = [...topicToName.keys()] as Hex[];
+
+export function isKnownShadowEventLog(log: any): boolean {
+  if (log?.eventName) return names.includes(log.eventName);
+  const topic = log?.topics?.[0];
+  return typeof topic === "string" && topicToName.has(topic.toLowerCase());
+}
 
 export function decodeShadowEvent(log: any, strict = false): DecodedShadowEvent | null {
   if (log?.eventName && log?.args) {
     if (!names.includes(log.eventName)) {
       if (strict) throw new Error(`unknown ShadowPass event: ${String(log.eventName)}`);
+      return null;
+    }
+    if (!log.args || typeof log.args !== "object") {
+      if (strict) throw new Error(`failed to decode ${String(log.eventName)}: missing args`);
       return null;
     }
     return { name: log.eventName, args: log.args, log };
@@ -85,6 +96,10 @@ export function decodeShadowEvent(log: any, strict = false): DecodedShadowEvent 
   }
   try {
     const decoded = decodeEventLog({ abi: shadowEvents, data: log.data, topics: log.topics, strict: false });
+    if (!decoded.args || typeof decoded.args !== "object") {
+      if (strict) throw new Error(`failed to decode ${name}: missing args`);
+      return null;
+    }
     return { name: decoded.eventName as ShadowEventName, args: decoded.args as Record<string, unknown>, log };
   } catch (error) {
     if (strict) throw new Error(`failed to decode ${name}: ${String(error)}`);

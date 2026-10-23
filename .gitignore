@@ -5,6 +5,9 @@ build/
 *.wtns
 out/
 cache/
+contracts/broadcast/
+.anvil.log
+.deploy.log
 .env
 .env.*
 .DS_Store

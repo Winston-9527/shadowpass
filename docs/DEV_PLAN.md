@@ -16,6 +16,7 @@
 | C1 钱包骨架：PWA、passkey + PRF、SDK key 派生、`/slot` 恢复 | 🚧 #10，等待真实 Chrome/Google 密码管理器与 Vercel 证据 |
 | A3 核心合约：Gate、Group、Registry、Revocations | ✅ #3，真实证明 30/30；gas 中位数：register 346,668、issue 98,604、deposit 360,961、transferBudget 479,017、execute D2 549,916、revoke 254,361 |
 | A4 应用合约：Payout、TreasuryAdapter、MockVault、ShadowToken | ✅ #4，Foundry 46/46；真实 Gate `TREASURY_SUPPLY → withdraw → NoteMemo` 集成通过 |
+| A5 部署：Anvil 一键环境 | 🚧 #5，Anvil MVP 实际部署和测试币发放通过，见 #37；Base Sepolia 与 D2 真实证明待做 |
 | 工单拆分（#2–#13，总览 #14）、README、`docs/INTERFACES.md`、`AGENTS.md` | ✅ |
 | 域名（passkey RP ID） | ✅ `shadowpass-wallet.vercel.app` |
 | monorepo 骨架、`docs/ARCHITECTURE.md`、CI | ✅ |

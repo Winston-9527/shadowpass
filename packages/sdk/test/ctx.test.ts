@@ -26,4 +26,18 @@ describe("ctx", () => {
       resource: "https://example.com/report",
     })).toBe("0x0c379878d4c398bcf334bf23fa848e9df571bb2a7615414bdbf8aa6775685a6a");
   });
+
+  it("requires memoChange at runtime", () => {
+    expect(() => ctxHash({
+      chainId: 84532n,
+      gate: "0x1111111111111111111111111111111111111111",
+      action: {
+        target: "0x2222222222222222222222222222222222222222",
+        method: "0x12345678",
+        amount: 1n,
+        nonce: 1n,
+        params: "0x",
+      },
+    } as any)).toThrow("memoChange required");
+  });
 });
