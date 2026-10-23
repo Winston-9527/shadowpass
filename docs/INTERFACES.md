@@ -47,6 +47,7 @@ sign_prv    = HKDF-SHA256(seed, salt = 空, info = "shadowpass/sign", 32 字节)
 steward_prv = HKDF-SHA256(seed, salt = 空, info = "shadowpass/steward", 32 字节)  -> identity(steward_prv)，管家分配钥（ent1）
 vsk         = HKDF-SHA256(seed, salt = 空, info = "shadowpass/view", 64 字节) mod L；为 0 时改用 info "shadowpass/view-retry"
 box_sk      = HKDF-SHA256(seed, salt = 空, info = "shadowpass/box", 32 字节)      -> X25519 私钥，box_pk = crypto_scalarmult_base(box_sk)
+rec_key     = HKDF-SHA256(seed, salt = 空, info = "shadowpass/owner-record", 32 字节) -> HMAC 密钥，用于认证 §7 的主人记录
 ```
 
 - **恢复码**：20 个 Crockford Base32 字符（100 bit 熵），显示为 `XXXX-XXXX-XXXX-XXXX-XXXX`。规范化：去掉 `-` 和空格，转大写，`I`/`L` → `1`，`O` → `0`。
@@ -164,12 +165,17 @@ MCP 在终端同时打印这个链接、同样内容的配对码（base64url 字
 
 **主人自己的卡片记录**（钱包 → 主人自己的信箱，用于换设备后恢复授权树）：
 ```json
-{ "type": "owner_card", "seq": 7, "cardId": "<cert1.hash>", "card": { "name": "..", "agentPk": {..}, "agentBox": "..", "cap": "1", "expiry": "..", "cert": { /* cert1 */ }, "status": "delivered" } }
-{ "type": "owner_root", "seq": 1, "cert0": { /* 完整 cert0，含 expiry 和签名 */ } }
+{ "type": "owner_card", "seq": 7, "cardId": "<cert1.hash>", "card": { "name": "..", "agentPk": {..}, "agentBox": "..", "cap": "1", "expiry": "..", "cert": { /* cert1 */ }, "status": "delivered" }, "mac": ".." }
+{ "type": "owner_root", "seq": 1, "cert0": { /* 完整 cert0，含 expiry 和签名 */ }, "mac": ".." }
 ```
 - **一张卡一条消息**，不要把所有卡打包成一个快照（打包后会超过信箱 16 KiB 的单条上限）。
 - `seq` 是钱包本地单调递增的序号。恢复时**按 `cardId` 合并**，同一张卡取 `seq` 最大的那条，绝不能用一条消息整体覆盖本地数据。
 - 恢复出来的每张卡都要和链上核对：`cert1.hash` 已签发（`Issued` 事件），签名有效，状态以链上为准（是否被吊销）。核对不过的丢弃。
+- **记录必须认证。** 信箱的 sealed box 是匿名的，每个配对过的 Agent 都知道 `owner.box`，任何人都能往主人信箱里写入格式正确的 `owner_card`。所以两种记录都要带 `mac`：
+  ```
+  mac = hex(HMAC-SHA256(rec_key（§3）, canonical_json(去掉 mac 字段后的记录)))   // canonical_json：键按字典序排序，无空白
+  ```
+  恢复时先校验 `mac`，再校验内容；`mac` 不对的记录直接丢弃，也**不能**用它推进 `seq`。即使 `mac` 正确，也不能让一条记录覆盖本地已经和链上核对过票据的卡片字段（票据、凭证包），只能更新 `status` 和 `name`。
 - 信箱只保留 30 天，所以这些记录只用于加速恢复。权威来源是链上：`owner_root` 丢失时，用 §13 的种子恢复，再按 §11 扫描 `NoteMemo` 找回管家名下的票据。
 
 Agent 用 `delegate` 创建子 Agent 时，向主人信箱发送 `{"type": "delegated", "parent": "<hash>", "cert": {...}}`，主人钱包据此显示授权树，并用于祖先吊销（工单 A2）。每笔付款后发送 `{"type": "receipt", "budgetNf": "..", "tx": "..", "resource": "..", "amount": ".."}`。收据只用于展示，以链上解密为准。
