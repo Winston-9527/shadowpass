@@ -85,6 +85,8 @@ for (const entry of messages) {
 
 客户端使用 `libsodium-wrappers 0.7.15`。`crypto_box_seal` 不认证发送方；坏条目会保留 `id`、标记 `decoded: false` 并继续返回后续消息。收据本来就不能作为链上事实，最终以链上事件和主人解密结果为准。
 
+`send` 的收件人公钥同时接受 32 字节 `Uint8Array` 和 64 位 hex 字符串（可选 `0x` 前缀），字符串会先做格式校验再转换。
+
 消息箱单次 `poll` 最多返回 200 条。满 200 条时用最后一条的 `id` 作为下一次 `after`；需要一次拉完时使用 `pollAll`。备份槽由钱包的 `HttpBackupSlotClient` 独立调用 `/slot`。
 
 ## 测试

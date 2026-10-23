@@ -18,7 +18,14 @@ function bytesToHex(bytes: Uint8Array): string {
   return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
-function decodePublicKey(value: Uint8Array): Uint8Array {
+function decodePublicKey(value: Uint8Array | string): Uint8Array {
+  if (typeof value === "string") {
+    const hex = value.replace(/^0x/, "");
+    if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+      throw new Error("mailbox public key must be 32-byte hex");
+    }
+    return Uint8Array.from(hex.match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16));
+  }
   const bytes = Uint8Array.from(value);
   if (bytes.length !== 32) throw new Error("mailbox public key must be 32 bytes");
   return bytes;
@@ -45,7 +52,7 @@ export class MailboxClient {
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
-  async send(toPk: Uint8Array, message: unknown): Promise<number> {
+  async send(toPk: Uint8Array | string, message: unknown): Promise<number> {
     await sodium.ready;
     const publicKey = decodePublicKey(toPk);
     const plaintext = typeof message === "string"
