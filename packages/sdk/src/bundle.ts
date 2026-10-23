@@ -68,6 +68,17 @@ export function decodeBundle(encoded: string): CertificateBundle {
   const bundle = CertificateBundleSchema.parse(JSON.parse(decoder.decode(base64UrlDecode(encoded)))) as CertificateBundle;
   for (const [index, cert] of bundle.chain.entries()) {
     if (!verifyBundleCert(cert)) throw new Error(`invalid certificate signature at hop ${index}`);
+    if (cert.hop !== index) throw new Error(`invalid certificate hop at index ${index}`);
+    if (index > 0) {
+      const previous = bundle.chain[index - 1]!;
+      if (previous.holder.x !== cert.issuer.x || previous.holder.y !== cert.issuer.y) {
+        throw new Error(`certificate chain discontinuity at hop ${index}`);
+      }
+    }
+  }
+  for (let index = 0; index < 4; index += 1) {
+    const expected = bundle.chain[index] ? bundle.chain[index]!.hash : "0";
+    if (bundle.note.lin[index] !== expected) throw new Error(`note lineage mismatch at slot ${index}`);
   }
   return bundle;
 }

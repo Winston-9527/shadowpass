@@ -28,6 +28,8 @@ export const mul = (point: Point, scalar: bigint): Point =>
 export const add = (left: Point, right: Point): Point =>
   toPoint(babyJub.addPoint(fieldPoint(left), fieldPoint(right)));
 
+export const inCurve = (point: Point): boolean => babyJub.inCurve(fieldPoint(point));
+
 export const BASE8: Point = toPoint(babyJub.Base8);
 export const GENERATOR: Point = toPoint(babyJub.Generator);
 

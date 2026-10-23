@@ -1,5 +1,5 @@
 import { KEY_TAG, L } from "./constants.js";
-import { BASE8, add, mul, poseidon, sign } from "./crypto.js";
+import { BASE8, add, inCurve, mul, poseidon, sign } from "./crypto.js";
 import type { Cert, CertificateBundle, Identity, Point, Signature } from "./types.js";
 
 export function certHash0(issuer: Identity, holder: Identity, cap: bigint, expiry: bigint, vpk: Point): bigint {
@@ -67,6 +67,9 @@ export function verifyBundleCert(cert: CertificateBundle["chain"][number]): bool
       : certHash(cert.hop, issuer, holder, BigInt(cert.cap), BigInt(cert.expiry));
     if (expectedHash !== BigInt(cert.hash)) return false;
     const signature = { x: BigInt(cert.sig.R8x), y: BigInt(cert.sig.R8y) };
+    const issuerPoint = { x: issuer.Ax, y: issuer.Ay };
+    if (!inCurve(issuerPoint) || !inCurve({ x: holder.Ax, y: holder.Ay }) || !inCurve(signature)) return false;
+    if (cert.hop === 0 && (!cert.vpk || !inCurve({ x: BigInt(cert.vpk.x), y: BigInt(cert.vpk.y) }))) return false;
     const scalar = BigInt(cert.sig.S);
     if (scalar <= 0n || scalar >= L) return false;
     const challenge = poseidon[5]([signature.x, signature.y, issuer.Ax, issuer.Ay, expectedHash]);

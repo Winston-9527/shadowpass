@@ -11,6 +11,7 @@ import {
   noteCm,
   scanNotes,
 } from "../src/notes.js";
+import { MerkleTree } from "../src/trees.js";
 import type { Note } from "../src/types.js";
 
 const seed = Uint8Array.from({ length: 32 }, (_, index) => index + 10);
@@ -59,6 +60,17 @@ describe("note memos", () => {
     const memo = await encodeNoteMemo({ ...note, q: 999n }, keys.box.publicKey);
     const state = { spentNullifiers: new Set<string>(), memos: new Map<string, Uint8Array>() };
     expect(await scanNotes(state, noteLogs(noteCm(note), memo), { boxSk: keys.box.privateKey, holderSks: [keys.steward.sk] })).toEqual([]);
+  });
+
+  it("uses state.notes and state.memos with an empty log batch", async () => {
+    const keys = await deriveKeys(seed);
+    const memo = await encodeNoteMemo(note, keys.box.publicKey);
+    const state = {
+      spentNullifiers: new Set<string>(),
+      notes: new MerkleTree([noteCm(note)]),
+      memos: new Map([[noteCm(note).toString(), memo]]),
+    };
+    expect(await scanNotes(state, [], { boxSk: keys.box.privateKey, holderSks: [keys.steward.sk] })).toEqual([note]);
   });
 
   it("cannot open another recipient's memo and excludes spent notes", async () => {

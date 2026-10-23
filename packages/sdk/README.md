@@ -35,6 +35,8 @@ SHADOWPASS_BROWSER_URL=http://127.0.0.1:4173 npm run browser:proof -w @shadowpas
 
 浏览器测试需要将 `wasm`、`zkey`、`vk` 和对应 `MANIFEST.sha256` 放在 `browser/public/zk/circuits-v2/`。这些产物不进 git。
 
+`MailboxClient.poll` 返回的批次最多 200 条；`pollAll` 会自动继续拉取。
+
 `src/artifact-hashes.ts` 由 `npm run artifact:hashes -w @shadowpass/sdk` 从
 `circuits/zk/MANIFEST.sha256` 生成；`loadArtifacts` 默认用它校验 zkey/vk，
 不信任远程托管方返回的 manifest。

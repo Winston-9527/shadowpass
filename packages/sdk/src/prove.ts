@@ -19,6 +19,42 @@ export interface ArtifactSet {
   manifest: string;
 }
 
+function scalar(input: Record<string, unknown>, key: string): string {
+  if (input[key] === undefined) throw new Error(`witness is missing ${key}`);
+  return String(input[key]);
+}
+
+export function expectedPublicSignals(circuit: CircuitName, input: Record<string, unknown>): string[] {
+  if (circuit === "main_reg") {
+    return ["group_root", "domain", "nf_domain", "leaf0"].map((key) => scalar(input, key));
+  }
+  if (circuit === "main_revoke") {
+    return ["old_root", "new_root", "entry", "next_index"].map((key) => scalar(input, key));
+  }
+  if (circuit === "budget_transfer") {
+    return ["note_root", "revoked_root", "nullifier", "cm_out1", "cm_out2"].map((key) => scalar(input, key));
+  }
+  if (circuit === "budget_mint") return ["cm", "q"].map((key) => scalar(input, key));
+  const ownE = input.own_e;
+  if (!Array.isArray(ownE)) throw new Error("witness is missing own_e");
+  return [
+    scalar(input, "state_root"),
+    scalar(input, "now"),
+    scalar(input, "ctx_hash"),
+    scalar(input, "act_req_cap"),
+    scalar(input, "own_c1x"),
+    scalar(input, "own_c1y"),
+    scalar(input, "own_c2x"),
+    scalar(input, "own_c2y"),
+    ...ownE.map(String),
+    scalar(input, "own_esign"),
+    scalar(input, "note_root"),
+    scalar(input, "budget_nf"),
+    scalar(input, "cm_change"),
+    scalar(input, "q_spent"),
+  ];
+}
+
 export interface LoadArtifactsOptions {
   circuit: CircuitName;
   dir?: string;
@@ -107,7 +143,13 @@ export async function prove(
   artifacts: ArtifactSet,
 ): Promise<{ proof: any; publicSignals: string[] }> {
   if (artifacts.circuit !== circuit) throw new Error("artifact circuit mismatch");
-  return snarkjs.groth16.fullProve(input, artifacts.wasm, artifacts.zkey);
+  const result = await snarkjs.groth16.fullProve(input, artifacts.wasm, artifacts.zkey);
+  const expected = expectedPublicSignals(circuit, input);
+  const publicSignals = result.publicSignals as string[];
+  if (publicSignals.length !== expected.length || publicSignals.some((value: string, index: number) => value !== expected[index])) {
+    throw new Error("publicSignals do not match witness public inputs");
+  }
+  return { proof: result.proof, publicSignals };
 }
 
 export async function verify(artifacts: ArtifactSet, proof: any, publicSignals: string[]): Promise<boolean> {
