@@ -22,6 +22,7 @@ describe("runtime refresh", () => {
       mailbox,
       refreshState: async () => revokedState(fixture),
     });
+    expect(runtime.services.payment).toBeDefined();
     expect((await walletStatus(runtime.context)).status).toBe("active");
     await refreshRuntime(runtime);
     const status = await walletStatus(runtime.context);

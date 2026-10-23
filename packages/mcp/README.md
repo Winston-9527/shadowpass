@@ -10,10 +10,12 @@ Agent 侧 stdio MCP server。它把 Agent 的本地 EdDSA holder 私钥、X25519
 - 从加密信箱接收凭证包，验证签名、链连续性、链上签发、吊销状态、有效期和票据树成员关系；能力取整条链按位与，有效期取最小值。
 - 每次工具调用前刷新链上状态并同步信箱；链上状态不可用，或可信凭证依赖的链上写入暂时不可见时，保留信箱游标，不消费该凭证包。启动时会从链上票据备忘恢复本地票据。
 - 提供 `wallet_status`、`list_receipts`、`pay`、`treasury_supply`、`treasury_status`、`delegate`。
-- `pay` 和 `treasury_supply` 在执行前本地检查能力位、金额上限和参数；能力不符时不会发起链上请求。
+- `pay` 通过官方 x402 fetch 客户端处理 402：使用 SDK 选票、构造 action 和找零 `memoChange`，生成 D1/D2/D3 证明并在本地验证通过后才提交；`spendControls` 只允许部署中的测试币，并限制单笔金额。
+- `pay` 返回商家响应体（最多 32 KiB），并标记为 `trust: "untrusted"`；付款成功后立即把找零票据写入本地 store。
+- `pay` 和 `treasury_supply` 在执行前本地检查能力位、金额上限和参数；能力不符时不会生成证明或发起网络请求。
 - 付款成功后记录收据并发送给主人信箱；`--malicious` 只跳过收据上报，仍保留本地记录。
 
-`pay` 的 x402 后端要等 #8 合并后的 `ShadowpassPaymentBuilder` 接线；`treasury_supply` 要等 #4/#5 的 Adapter 与部署；当前未配置时返回明确的 `*_backend_unavailable`，不会伪造成功结果。
+`pay` 已使用 `@shadowpass/x402` 的 `ShadowpassClientScheme` 与 `@x402/fetch`；缺少 RPC、证明产物或凭证时会返回固定错误码，不会伪造成功。`treasury_supply`、`treasury_status` 与 `delegate` 的真实后端仍待后续接线。
 
 ## 安装
 
@@ -74,6 +76,8 @@ claude mcp add shadowpass -- \
 
 重启客户端后，可以说“帮我买一份报告”；如果 Agent 尚未配对或付款后端未配置，工具会返回明确错误，不会直接付款。
 
+本地 anvil 必须持续出块，建议使用 `anvil --block-time 1`。Gate 的 `nowTs` 使用最新区块时间并限制 60 秒时钟偏差；链空闲过久时，需要先产生新区块，否则付款会因 `BadClock` 失败。
+
 ## 本地数据
 
 默认目录：
@@ -96,4 +100,4 @@ npm run typecheck -w @shadowpass/mcp
 npm test -w @shadowpass/mcp
 ```
 
-测试使用 mock chain state、mock payment/treasury backend 和真实 stdio MCP Client，不依赖 anvil 或外部服务。覆盖首次配对、主人锁定、伪造签名、自签未注册根、重放、回滚、链上状态缺失、启动后吊销和票据恢复。真实 x402 + anvil 端到端在 #8、#5 合并后补跑。
+测试使用 mock chain state、可注入 prover、真实 SDK witness 和官方 x402 fetch 客户端，不依赖 anvil 或外部服务。覆盖首次配对、主人锁定、伪造签名、重放、回滚、链上状态恢复、票据恢复、找零 memo、ctx_hash 绑定、本地证明预验证、测试币限制和单笔上限。真实 anvil 商家端到端与耗时分解在下一阶段补跑。
