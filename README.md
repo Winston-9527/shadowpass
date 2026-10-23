@@ -65,7 +65,7 @@ flowchart LR
 | `contracts/` | Foundry：verifier、Gate、Registry、Payout、TreasuryAdapter | 🚧 |
 | `packages/sdk/` | 链上状态同步、witness、证明、凭证包、信箱客户端（唯一实现，各方共用） | ⏳ |
 | `packages/x402/` | `shadowpass` scheme 的 client / server / facilitator 类 | ⏳ |
-| `packages/mcp/` | Agent 端 MCP server | ⏳ |
+| `packages/mcp/` | Agent 端 MCP server：stdio、本地密钥、配对、凭证同步、状态与收据（#7 第 1 步） | 🚧 |
 | `services/facilitator/` | x402 facilitator + 钱包交易代付 | ⏳ |
 | `services/merchant-demo/` | 示例商家（官方 x402 中间件） | ⏳ |
 | `services/mailbox/` | 加密信箱 | ⏳ |
