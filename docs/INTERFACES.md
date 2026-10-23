@@ -37,7 +37,7 @@ vpk = vsk * Base8 = 8 * own_w，own_w = vsk * Generator
 seed        = 32 字节 CSPRNG，开通时生成一次
 prf_i       = WebAuthn PRF 输出：extensions.prf.eval.first = UTF-8("shadowpass-v1")
               （注册时看 prf.enabled；登录时只看 prf.results.first，登录结果里没有 enabled）
-              注册时 enabled = true 但没有 results（macOS iCloud 钥匙串就是这样，已在真机上确认）：
+              注册时 enabled = true 但没有 results（WebAuthn 规范允许这种情况，部分认证器如此；2026-10-23 在 Chrome 155 + Google 密码管理器上实测，注册时就直接返回了 32 字节结果，iCloud 钥匙串尚未实测）：
               立刻对这张新凭证做一次登录（allowCredentials = [新凭证 ID]，同样的 eval.first），从中取 prf_i。
               enabled 不是 true：直接报“不支持 PRF”，不再弹第二次。
 wrap_key_i  = HKDF-SHA256(ikm = prf_i, salt = UTF-8("shadowpass-v1"), info = "wrap", 32 字节)

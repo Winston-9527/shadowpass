@@ -20,8 +20,8 @@
 | 工单拆分（#2–#13，总览 #14）、README、`docs/INTERFACES.md`、`AGENTS.md` | ✅ |
 | 域名（passkey RP ID） | ✅ `shadowpass-wallet.vercel.app` |
 | monorepo 骨架、`docs/ARCHITECTURE.md`、CI | ✅ |
-| 演示形态：不做原生 App；Mac 浏览器 + Touch ID；Web Push 选做 | ✅ 2026-10-21 |
-| Aave 在 Base Sepolia 是否可用 | ⏳ 待确认，否则用模拟 ERC-4626 金库 |
+| 演示形态：不做原生 App；**Chrome + Google 密码管理器 + Touch ID**（PRF 已实测可用）；Safari 备用（未测）；Web Push 选做 | ✅ 2026-10-23 |
+| Aave 在 Base Sepolia 是否可用 | ✅ 不是 ERC-4626，改用 MockVault（#23） |
 
 ## 排期
 

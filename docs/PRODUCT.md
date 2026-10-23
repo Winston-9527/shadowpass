@@ -79,7 +79,7 @@ sk_view  = HKDF(seed, "view") mod l, ≠ 0
 | 项 | 决定 |
 |---|---|
 | 用户端 | Web PWA，桌面优先、兼容手机；不做原生 App（后台扫描和可靠推送进路线图） |
-| 演示设备 | Mac 浏览器 + Touch ID（Safari 优先，Chrome 备用），iPhone 为加分项 |
+| 演示设备 | **Mac 上的 Chrome + Google 密码管理器 passkey + Touch ID**（2026-10-23 实测：注册和登录都返回 PRF，passkey 随 Google 账号同步）；Safari / iCloud 钥匙串为备用（未实测）；iPhone 为加分项 |
 | Agent 端 | MCP server，用户自己的电脑 |
 | 登录 | Passkey + PRF 包裹随机种子 |
 | 验证 | 链上 Gate 唯一有约束力；MCP 提交前预验证；facilitator `eth_call` 预检；公开复核页 |
