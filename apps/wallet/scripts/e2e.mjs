@@ -1,0 +1,189 @@
+import { mkdir } from "node:fs/promises";
+import { chromium } from "playwright";
+import { build, preview } from "vite";
+import { startSlotServer } from "./dev-mailbox.mjs";
+
+const outputDir = new URL("../e2e-output/", import.meta.url);
+await mkdir(outputDir, { recursive: true });
+
+const mailbox = await startSlotServer(0);
+const mailboxAddress = mailbox.address();
+if (!mailboxAddress || typeof mailboxAddress === "string") throw new Error("mailbox did not bind a TCP port");
+process.env.VITE_MAILBOX_URL = `http://127.0.0.1:${mailboxAddress.port}`;
+
+const configFile = new URL("../vite.config.ts", import.meta.url).pathname;
+await build({ configFile, mode: "production", logLevel: "silent" });
+const server = await preview({
+  configFile,
+  logLevel: "silent",
+  preview: { host: "localhost", port: 4173, strictPort: false },
+});
+const url = server.resolvedUrls?.local[0] ?? "http://localhost:4173";
+
+function installMockCredential() {
+  let counter = 0;
+  const prfFor = (rawId) => new Uint8Array(32).fill(5 + new Uint8Array(rawId)[0]);
+
+  class MockPublicKeyCredential {
+    constructor(rawId) {
+      this.rawId = rawId;
+      this.id = Array.from(new Uint8Array(rawId), (byte) => byte.toString(16).padStart(2, "0")).join("");
+      this.type = "public-key";
+      this.response = {
+        // macOS iCloud Keychain returns enabled during registration but only returns
+        // the actual PRF result during the targeted follow-up get().
+        getClientExtensionResults: () => ({ prf: { enabled: true } }),
+      };
+    }
+  }
+
+  Object.defineProperty(window, "PublicKeyCredential", { configurable: true, value: MockPublicKeyCredential });
+  Object.defineProperty(MockPublicKeyCredential, "isUserVerifyingPlatformAuthenticatorAvailable", {
+    configurable: true,
+    value: async () => true,
+  });
+  Object.defineProperty(navigator, "credentials", {
+    configurable: true,
+    value: {
+      create: async () => new MockPublicKeyCredential(new Uint8Array(16).fill(++counter).buffer),
+      get: async (options) => {
+        const requested = options?.publicKey?.allowCredentials?.[0]?.id;
+        const rawId = requested instanceof ArrayBuffer ? requested : new Uint8Array(16).fill(1).buffer;
+        const credential = new MockPublicKeyCredential(rawId);
+        credential.response = {
+          getClientExtensionResults: () => ({ prf: { results: { first: prfFor(rawId).buffer } } }),
+        };
+        return credential;
+      },
+    },
+  });
+}
+
+async function waitForUnlocked(page) {
+  await Promise.race([
+    page.locator(".keys-panel").waitFor(),
+    page.locator(".inline-error").waitFor().then(async () => {
+      throw new Error(`wallet unlock failed: ${await page.locator(".inline-error").textContent()}`);
+    }),
+  ]);
+}
+
+const browser = await chromium.launch({ channel: "chrome" });
+try {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 980 } });
+  await context.addInitScript(installMockCredential);
+  const page = await context.newPage();
+  const response = await page.goto(url);
+  const csp = response?.headers()["content-security-policy"] ?? "";
+  if (!csp.includes("'wasm-unsafe-eval'")) throw new Error("preview response missing wasm CSP");
+  await page.evaluate(() => WebAssembly.compile(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0)));
+
+  await page.getByTestId("create-wallet").click();
+  await page.getByRole("dialog").waitFor();
+  const recoveryCode = await page.locator(".recovery-code").textContent();
+  if (!recoveryCode) throw new Error("Recovery code was not rendered");
+  await page.screenshot({ path: new URL("wallet-recovery.png", outputDir).pathname, fullPage: true });
+  await page.getByRole("button", { name: "I stored it" }).click();
+
+  const firstFingerprint = await page.locator(".key-row code").first().textContent();
+  await page.getByRole("button", { name: "Lock" }).click();
+  await page.locator(".passkey-row").first().click();
+  await waitForUnlocked(page);
+  if (await page.locator(".key-row code").first().textContent() !== firstFingerprint) throw new Error("Passkey unlock changed the signing key");
+
+  await page.getByRole("button", { name: "Add passkey" }).click();
+  await page.getByRole("button", { name: "Lock" }).click();
+  if (await page.locator(".passkey-row").count() !== 2) throw new Error("Second passkey was not persisted");
+  await page.locator(".passkey-row").nth(1).click();
+  await waitForUnlocked(page);
+  if (await page.locator(".key-row code").first().textContent() !== firstFingerprint) throw new Error("Second passkey changed the signing key");
+  await page.screenshot({ path: new URL("wallet-unlocked.png", outputDir).pathname, fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await page.locator(".passkey-row").first().waitFor();
+  const horizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+  await page.screenshot({ path: new URL("wallet-mobile.png", outputDir).pathname, fullPage: true });
+  if (horizontalOverflow) {
+    const offenders = await page.evaluate(() => [...document.querySelectorAll("*")]
+      .map((element) => ({ tag: element.tagName, className: element.className, right: element.getBoundingClientRect().right, width: element.getBoundingClientRect().width }))
+      .filter((entry) => entry.right > window.innerWidth + 1)
+      .slice(0, 10));
+    throw new Error(`Mobile layout overflows horizontally: ${JSON.stringify(offenders)}`);
+  }
+  await context.close();
+
+  const syncedContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await syncedContext.addInitScript(installMockCredential);
+  const syncedPage = await syncedContext.newPage();
+  await syncedPage.goto(url);
+  await syncedPage.getByRole("button", { name: "Use synced passkey" }).click();
+  await waitForUnlocked(syncedPage);
+  if (await syncedPage.locator(".key-row code").first().textContent() !== firstFingerprint) throw new Error("Passkey slot restore changed the signing key");
+  await syncedContext.close();
+
+  const recoveryContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await recoveryContext.addInitScript(installMockCredential);
+  const recoveryPage = await recoveryContext.newPage();
+  await recoveryPage.goto(url);
+  await recoveryPage.getByTestId("recovery-input").fill(recoveryCode);
+  await recoveryPage.getByTestId("recover-wallet").click();
+  await waitForUnlocked(recoveryPage);
+  if (await recoveryPage.locator(".key-row code").first().textContent() !== firstFingerprint) throw new Error("Recovery slot changed the signing key");
+  await recoveryContext.close();
+
+  const unavailableContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  await unavailableContext.addInitScript(() => {
+    Object.defineProperty(window, "PublicKeyCredential", { configurable: true, value: undefined });
+    Object.defineProperty(navigator, "credentials", { configurable: true, value: {} });
+  });
+  const unavailablePage = await unavailableContext.newPage();
+  await unavailablePage.goto(url);
+  await unavailablePage.getByTestId("prf-unavailable").waitFor();
+  await unavailablePage.screenshot({ path: new URL("wallet-prf-unavailable.png", outputDir).pathname, fullPage: true });
+  await unavailableContext.close();
+
+  const noPrfContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  await noPrfContext.addInitScript(() => {
+    class NoPrfPublicKeyCredential {
+      rawId = new Uint8Array(16).fill(3).buffer;
+      id = "no-prf";
+      type = "public-key";
+      response = {
+        getClientExtensionResults: () => ({ prf: { enabled: false } }),
+      };
+    }
+    Object.defineProperty(window, "PublicKeyCredential", { configurable: true, value: NoPrfPublicKeyCredential });
+    Object.defineProperty(navigator, "credentials", {
+      configurable: true,
+      value: {
+        create: async () => new NoPrfPublicKeyCredential(),
+        get: async () => {
+          throw new Error("PRF fallback prompt must not run");
+        },
+      },
+    });
+  });
+  const noPrfPage = await noPrfContext.newPage();
+  await noPrfPage.goto(url);
+  await noPrfPage.getByTestId("create-wallet").click();
+  await noPrfPage.locator(".inline-error").waitFor();
+  if (!(await noPrfPage.locator(".inline-error").textContent())?.includes("does not expose")) {
+    throw new Error("PRF-disabled registration did not show the expected message");
+  }
+  await noPrfPage.screenshot({ path: new URL("wallet-prf-unsupported.png", outputDir).pathname, fullPage: true });
+  await noPrfContext.close();
+
+  console.log(JSON.stringify({
+    ok: true,
+    url,
+    previewHeaders: { csp },
+    mailbox: process.env.VITE_MAILBOX_URL,
+    screenshots: ["wallet-recovery.png", "wallet-unlocked.png", "wallet-mobile.png", "wallet-prf-unavailable.png", "wallet-prf-unsupported.png"],
+    checks: ["production CSP + WebAssembly", "iCloud-style two-step PRF", "create", "passkey unlock", "second passkey with distinct PRF", "synced passkey slot", "recovery slot in new browser with pagination", "mobile overflow", "no WebAuthn", "authenticator without PRF"],
+  }, null, 2));
+} finally {
+  await browser.close();
+  await server.close();
+  await new Promise((resolve) => mailbox.close(resolve));
+}

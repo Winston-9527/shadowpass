@@ -1,0 +1,16 @@
+{
+  "name": "ShadowPass Wallet",
+  "short_name": "ShadowPass",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f5f7",
+  "theme_color": "#101820",
+  "icons": [
+    {
+      "src": "/shadowpass.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

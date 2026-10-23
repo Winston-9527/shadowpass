@@ -13,5 +13,6 @@ apps/wallet/public/zk/
 !.env.example
 packages/sdk/browser/dist/
 apps/wallet/dist/
+apps/wallet/e2e-output/
 packages/sdk/browser/public/fixture.json
 packages/sdk/browser/public/zk/

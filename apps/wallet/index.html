@@ -1,104 +1,16 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>ShadowPass — 给 AI Agent 的隐私预付卡</title>
-    <meta
-      name="description"
-      content="用 Face ID 给任何 AI Agent 发一张有额度、有用途限制、可随时冻结的预付卡。商家和钱包商都不知道这张卡属于谁。"
-    />
-    <meta name="theme-color" content="#08090b" />
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101820" />
+    <meta name="description" content="ShadowPass owner wallet" />
+    <link rel="icon" href="/shadowpass.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <title>ShadowPass Wallet</title>
   </head>
   <body>
-    <main class="shell">
-      <header class="topbar">
-        <div class="brand">
-          <span class="mark" aria-hidden="true"></span>
-          <span>ShadowPass</span>
-        </div>
-        <div class="chips">
-          <span class="chip" id="network">Base Sepolia</span>
-          <span class="chip chip-quiet" id="commit">dev</span>
-        </div>
-      </header>
-
-      <section class="hero">
-        <p class="eyebrow">Hackathon prototype · ZK-DAC v9.2</p>
-        <h1>给 AI Agent 的<wbr /><span class="nowrap">隐私预付卡</span></h1>
-        <p class="lede">
-          用 Face ID 给你的任何 Agent 发一张卡：有额度、有用途限制、随时冻结。
-          Agent 每一笔消费都瞒不了你，而商家和钱包商都不知道这张卡属于谁。
-        </p>
-        <div class="actions">
-          <a class="btn btn-primary" href="https://github.com/Winston-9527/shadowpass">查看源码</a>
-          <a
-            class="btn"
-            href="https://github.com/Winston-9527/shadowpass/blob/main/docs/PRODUCT.md"
-            >产品方案</a
-          >
-        </div>
-        <p class="notice">
-          钱包 UI 正在开发中。这个页面先占住 <code>shadowpass-wallet.vercel.app</code>，
-          它同时是 passkey 的 RP ID 和零知识证明产物的托管地址。
-        </p>
-      </section>
-
-      <section class="grid" aria-label="核心特性">
-        <article class="card">
-          <h2>商家看到的是资金池</h2>
-          <p>
-            链上只看到资金池里某个已授权的 Agent，看不到你的地址，消费无法被串联到个人。
-          </p>
-        </article>
-        <article class="card">
-          <h2>钱包商只看到入金</h2>
-          <p>授权关系与花费明细不经过钱包商，它只知道你往池子里放了多少。</p>
-        </article>
-        <article class="card">
-          <h2>只有你能对账</h2>
-          <p>用你自己的查看钥解密每一笔消费，Agent 瞒不了你，也不需要信任任何第三方。</p>
-        </article>
-        <article class="card">
-          <h2>能力逐级收窄</h2>
-          <p>
-            零知识委托链让下级 Agent 的额度和有效期只能更小；被注入攻破的采购 Agent 碰不到理财资金。
-          </p>
-        </article>
-      </section>
-
-      <section class="split">
-        <div>
-          <h2 class="section-title">Demo 里的两条支线</h2>
-          <pre class="tree"><code>Alice（7 天，100 USDC）
- └─ 管家 {PAY, TREASURY}
-     ├─ 采购 Agent {PAY}        买报告、订阅新闻
-     └─ 理财 Agent {TREASURY}   存白名单金库</code></pre>
-        </div>
-        <div>
-          <h2 class="section-title">仓库</h2>
-          <ul class="links">
-            <li><a href="https://github.com/Winston-9527/shadowpass">Winston-9527/shadowpass</a></li>
-            <li>
-              <a href="https://github.com/Winston-9527/shadowpass/blob/main/docs/ARCHITECTURE.md"
-                >代码架构</a
-              >
-            </li>
-            <li>
-              <a href="https://github.com/Winston-9527/shadowpass/blob/main/docs/INTERFACES.md"
-                >接口规范</a
-              >
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <footer>
-        <span>未审计，仅用于测试网演示。</span>
-        <span id="year"></span>
-      </footer>
-    </main>
-    <script type="module" src="/src/main.ts"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
