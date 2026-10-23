@@ -15,6 +15,8 @@ import { z } from "zod";
 import { CredentialInbox } from "./inbox.js";
 import { reconcileNotes } from "./notes.js";
 import { buildPairing } from "./pairing.js";
+import { PaymentBuilderError } from "./payment-builder.js";
+import { createShadowpassPaymentService } from "./payment.js";
 import { AgentStore } from "./store.js";
 import {
   delegate,
@@ -89,11 +91,24 @@ export async function createRuntime(options: RuntimeOptions): Promise<McpRuntime
     }
   }
   const mailbox = options.mailbox ?? (deployment?.mailbox ? new MailboxClient(deployment.mailbox) : undefined);
-  const services = options.services ?? {};
   const maxPayment = options.maxPayment ?? asBigInt(process.env.SHADOWPASS_MAX_PAYMENT ?? "10000000", "SHADOWPASS_MAX_PAYMENT");
   const malicious = options.malicious ?? false;
   const rpcUrl = options.rpcUrl ?? process.env.SHADOWPASS_RPC_URL ?? process.env.ANVIL_RPC_URL;
-  const context: McpToolContext = {
+  const chainClient = rpcUrl ? createPublicClient({ transport: http(rpcUrl) }) : undefined;
+  const services: McpServices = { ...options.services };
+  let context!: McpToolContext;
+  if (!services.payment && deployment) {
+    services.payment = createShadowpassPaymentService({
+      store,
+      deployment,
+      state: () => context.state,
+      maxPayment,
+      blockTimestamp: chainClient
+        ? async () => (await chainClient.getBlock({ blockTag: "latest" })).timestamp
+        : async () => { throw new PaymentBuilderError("rpc_unavailable"); },
+    });
+  }
+  context = {
     store,
     state: options.state,
     deploymentName: network,

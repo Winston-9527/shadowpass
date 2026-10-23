@@ -53,6 +53,7 @@ export interface PaymentResult {
   tx: string;
   resource: string;
   amount: string;
+  warning?: string;
 }
 
 export interface TreasurySupplyRequest {
