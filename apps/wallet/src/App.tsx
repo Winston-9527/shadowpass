@@ -22,6 +22,8 @@ import { hasPlatformPasskeySupport, PrfUnsupportedError, type PasskeyRecord } fr
 import { addPasskey, createWallet, lockSession, recoverWallet, unlockWallet, unlockWithSyncedPasskey, type WalletSession } from "./wallet/session";
 import { publicKeyText, type WalletKeyKind } from "./wallet/keys";
 import { LandingSections } from "./LandingSections";
+import { loadWalletConfig, type WalletConfig } from "./flows/config";
+import { OwnerConsole } from "./views/OwnerConsole";
 
 type SupportState =
   | { status: "checking" }
@@ -92,6 +94,7 @@ export function App() {
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [walletConfig, setWalletConfig] = useState<WalletConfig | null>(null);
   const sessionRef = useRef<WalletSession | null>(null);
 
   const keyRows = useMemo(() => session ? [
@@ -120,8 +123,12 @@ export function App() {
         setSupport({ status: "unsupported", reason: "Backup mailbox is not configured. Set VITE_MAILBOX_URL before creating a wallet." });
         return;
       }
+      const config = await loadWalletConfig();
       await refreshPasskeys();
-      if (active) setSupport({ status: "ready" });
+      if (active) {
+        setWalletConfig(config);
+        setSupport({ status: "ready" });
+      }
     })().catch((cause) => {
       if (active) setSupport({ status: "unsupported", reason: errorMessage(cause) });
     });
@@ -200,7 +207,7 @@ export function App() {
           <span className="brand-sub">Wallet</span>
         </div>
         <div className="topbar-meta">
-          <span className="network-pill"><Link2 size={14} /> Base Sepolia</span>
+          <span className="network-pill"><Link2 size={14} /> {walletConfig?.network === "anvil" ? "Anvil" : "Base Sepolia"}</span>
           <span className={`lock-pill ${session ? "online" : ""}`}>
             {session ? <Check size={14} /> : <LockKeyhole size={14} />}
             {session ? "Unlocked" : "Locked"}
@@ -242,6 +249,10 @@ export function App() {
 
             {busy === "add-passkey" && <p className="operation-hint">Touch ID may be requested twice while the new passkey is confirmed.</p>}
             {error && <section className="inline-error session-error" role="alert"><AlertTriangle size={16} />{error}</section>}
+
+            {walletConfig
+              ? <OwnerConsole session={session} config={walletConfig} />
+              : <section className="inline-error session-error" role="alert"><AlertTriangle size={16} />Wallet network configuration is unavailable.</section>}
 
             <section className="keys-panel">
               <div className="section-heading">

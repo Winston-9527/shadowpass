@@ -14,7 +14,9 @@
     "preview": "vite preview --host localhost",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
-    "e2e": "node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs",
+    "e2e:chain": "node --import tsx scripts/chain-e2e.mts",
+    "e2e:browser-chain": "node --import tsx scripts/browser-chain-e2e.mts"
   },
   "dependencies": {
     "@shadowpass/sdk": "*",
