@@ -1,4 +1,4 @@
-import { budgetNullifier, ChainState, createNote, MerkleTree, noteCm } from "@shadowpass/sdk";
+import { budgetNullifier, ChainState, createNote, IndexedMerkleTree, MerkleTree, noteCm, stateRoot } from "@shadowpass/sdk";
 import type { BoxKeyPair, MailboxClient } from "@shadowpass/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { CredentialInbox } from "../src/inbox.js";
@@ -81,9 +81,30 @@ describe("CredentialInbox", () => {
       deploymentName: "anvil",
       chainId: deployment.chainId,
     }).sync();
-    expect(result.errors).toEqual(["root_not_registered"]);
+    expect(result).toMatchObject({ errors: ["root_not_registered"], cursor: 0, deferred: true });
     expect(await fixture.store.loadBundle()).toBeUndefined();
     expect(fixture.store.lastCredentialError).toBe("root_not_registered");
+    expect(fixture.store.mailboxCursor).toBe(0);
+
+    const roots = new MerkleTree([selfSigned.root.hash]);
+    const issued = new MerkleTree([selfSigned.child.hash]);
+    const notes = new MerkleTree([noteCm(selfSigned.note)]);
+    const revokedRoot = new IndexedMerkleTree().root;
+    const state = ChainState.fromLogs(deployment, [
+      { eventName: "Registered", args: { nf: 1n, leaf0: selfSigned.root.hash, index: 0, root: roots.root }, blockNumber: 1n, logIndex: 0 },
+      { eventName: "Issued", args: { certHash: selfSigned.child.hash, index: 0, root: issued.root }, blockNumber: 1n, logIndex: 1 },
+      { eventName: "NoteInserted", args: { cm: noteCm(selfSigned.note), index: 0, root: notes.root }, blockNumber: 1n, logIndex: 2 },
+      { eventName: "StateRegistered", args: { issued: issued.root, revoked: revokedRoot, root: roots.root, stateRoot: stateRoot(issued.root, revokedRoot, roots.root) }, blockNumber: 1n, logIndex: 3 },
+    ]);
+    const retry = await new CredentialInbox({
+      mailbox,
+      store: fixture.store,
+      state,
+      deploymentName: "anvil",
+      chainId: deployment.chainId,
+    }).sync();
+    expect(retry).toMatchObject({ accepted: 1, rejected: 0, cursor: 1, deferred: false });
+    expect(await fixture.store.loadBundle()).toEqual(selfSigned.bundle);
   });
 
   it("skips a bundle with a forged certificate signature", async () => {
@@ -154,7 +175,9 @@ describe("CredentialInbox", () => {
       chainId: deployment.chainId,
     }).sync();
     expect(result.errors).toEqual(["deployment_mismatch"]);
+    expect(result).toMatchObject({ cursor: 1, deferred: false });
     expect(fixture.store.lastCredentialError).toBe("deployment_mismatch");
+    expect(fixture.store.mailboxCursor).toBe(1);
     expect(await fixture.store.loadBundle()).toBeUndefined();
   });
 

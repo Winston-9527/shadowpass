@@ -1,4 +1,4 @@
-import { ChainState, createNote, MailboxClient, MerkleTree, noteCm } from "@shadowpass/sdk";
+import { budgetNullifier, ChainState, createNote, MailboxClient, MerkleTree, noteCm } from "@shadowpass/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { delegate, listReceipts, pay, treasurySupply, walletStatus } from "../src/tools.js";
 import type { McpToolContext } from "../src/tools.js";
@@ -97,6 +97,40 @@ describe("MCP tools", () => {
     await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
     await expect(pay(context(fixture), { url: "https://merchant.test/report", maxAmount: 1n })).rejects.toMatchObject({
       code: "payment_backend_unavailable",
+    });
+  });
+
+  it("stays authorized after the credential package note is spent when a same-lineage change remains", async () => {
+    const fixture = await createFixture();
+    await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
+    const change = createNote(fixture.store.holder, 20n, [fixture.c0.hash, fixture.c1.hash]);
+    await fixture.store.addNote({
+      own: [change.own[0].toString(), change.own[1].toString()],
+      q: change.q.toString(),
+      lin: change.lin.map(String) as typeof fixture.bundle.note.lin,
+      rho: change.rho.toString(),
+    });
+    const noteTree = new MerkleTree([noteCm(fixture.note), noteCm(change)]);
+    const state = ChainState.fromLogs(deployment, [
+      ...fixture.logs,
+      { eventName: "NoteInserted", args: { cm: noteCm(change), index: 1, root: noteTree.root }, blockNumber: 2n, logIndex: 0 },
+      { eventName: "Executed", args: { budgetNf: budgetNullifier(fixture.store.holder.sk, fixture.note), target: deployment.gate, method: "0x00000000", amount: 20n }, blockNumber: 2n, logIndex: 1 },
+    ]);
+    const toolContext = context(fixture, {
+      state,
+      malicious: true,
+      services: {
+        payment: {
+          pay: async () => ({ budgetNf: "9", tx: "0x123", resource: "https://merchant.test/report", amount: "5" }),
+        },
+      },
+    });
+    const status = await walletStatus(toolContext);
+    expect(status).toMatchObject({ status: "active", remainingBudget: "20" });
+    expect(status.validationErrors).not.toContain("note_spent");
+    await expect(pay(toolContext, { url: "https://merchant.test/report", maxAmount: 5n })).resolves.toMatchObject({
+      budgetNf: "9",
+      receiptReported: false,
     });
   });
 

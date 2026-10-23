@@ -1,6 +1,6 @@
 import { budgetNullifier, ChainState } from "@shadowpass/sdk";
 import { describe, expect, it } from "vitest";
-import { capForBundle, credentialExpiry, validateCredentialBundle } from "../src/credentials.js";
+import { capForBundle, credentialExpiry, validateCredentialBundle, validateCredentialChain } from "../src/credentials.js";
 import { createFixture, deployment, revokedState } from "./fixtures.js";
 
 describe("credential validation", () => {
@@ -104,6 +104,13 @@ describe("credential validation", () => {
     });
     expect(result.valid).toBe(false);
     expect(result.errors).toContain("note_spent");
+    expect(validateCredentialChain(fixture.bundle, {
+      store: fixture.store,
+      state,
+      deploymentName: "anvil",
+      chainId: deployment.chainId,
+      nowSeconds: 1_000n,
+    }).valid).toBe(true);
   });
 
   it("returns fixed error codes without echoing untrusted bundle fields", async () => {

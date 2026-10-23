@@ -90,15 +90,17 @@ export function capabilitiesOf(bundle: CertificateBundle): Capability[] {
   return result;
 }
 
-export function validateCredentialBundle(
+export interface CredentialValidationOptions {
+  store: AgentStore;
+  state: ChainStateLike | undefined;
+  deploymentName: string;
+  chainId: number;
+  nowSeconds?: bigint;
+}
+
+export function validateCredentialChain(
   bundle: CertificateBundle,
-  options: {
-    store: AgentStore;
-    state: ChainStateLike | undefined;
-    deploymentName: string;
-    chainId: number;
-    nowSeconds?: bigint;
-  },
+  options: CredentialValidationOptions,
 ): CredentialValidation {
   const errors: string[] = [];
   const { store, state } = options;
@@ -126,15 +128,6 @@ export function validateCredentialBundle(
     errors.push("terminal_holder_mismatch");
   }
 
-  const note = bundleNote(bundle);
-  if (note.own[0] !== store.holder.Ax || note.own[1] !== store.holder.Ay) {
-    errors.push("note_owner_mismatch");
-  }
-  for (let index = 0; index < 4; index += 1) {
-    const expected = index < bundle.chain.length ? BigInt(bundle.chain[index]!.hash) : 0n;
-    if (note.lin[index] !== expected) errors.push("note_lineage_mismatch");
-  }
-
   let revoked = false;
   if (!state) {
     errors.push("chain_state_unavailable");
@@ -154,10 +147,6 @@ export function validateCredentialBundle(
       revoked = true;
       errors.push("holder_revoked");
     }
-    if (state.notes.indexOf(noteCm(note)) < 0) errors.push("note_not_registered");
-    if (state.spentNullifiers.has(budgetNullifier(store.holder.sk, note).toString())) {
-      errors.push("note_spent");
-    }
   }
 
   const now = options.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
@@ -173,6 +162,41 @@ export function validateCredentialBundle(
     expiry: credentialExpiry(bundle),
     stateRegistered,
   };
+}
+
+export function validateCredentialBundle(
+  bundle: CertificateBundle,
+  options: CredentialValidationOptions,
+): CredentialValidation {
+  const chainValidation = validateCredentialChain(bundle, options);
+  const first = bundle.chain[0];
+  const last = bundle.chain.at(-1);
+  if (!first || !last) return chainValidation;
+
+  const errors = [...chainValidation.errors];
+  const note = bundleNote(bundle);
+  if (note.own[0] !== options.store.holder.Ax || note.own[1] !== options.store.holder.Ay) {
+    errors.push("note_owner_mismatch");
+  }
+  for (let index = 0; index < 4; index += 1) {
+    const expected = index < bundle.chain.length ? BigInt(bundle.chain[index]!.hash) : 0n;
+    if (note.lin[index] !== expected) errors.push("note_lineage_mismatch");
+  }
+  if (options.state) {
+    if (options.state.notes.indexOf(noteCm(note)) < 0) errors.push("note_not_registered");
+    if (options.state.spentNullifiers.has(budgetNullifier(options.store.holder.sk, note).toString())) {
+      errors.push("note_spent");
+    }
+  }
+  const uniqueErrors = [...new Set(errors)];
+  return { ...chainValidation, valid: uniqueErrors.length === 0, errors: uniqueErrors };
+}
+
+export function isRetryableCredentialError(code: string): boolean {
+  return code === "chain_state_unavailable"
+    || code === "root_not_registered"
+    || code === "certificate_not_issued"
+    || code === "note_not_registered";
 }
 
 export interface ChainStateLike {

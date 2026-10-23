@@ -6,7 +6,7 @@ import {
   truncateKey,
 } from "@shadowpass/sdk";
 import type { CertificateBundle, Note } from "@shadowpass/sdk";
-import { capForBundle, credentialCap, credentialExpiry, validateCredentialBundle } from "./credentials.js";
+import { capForBundle, credentialCap, credentialExpiry, validateCredentialChain } from "./credentials.js";
 import type { AgentStore } from "./store.js";
 import {
   McpToolError,
@@ -58,7 +58,7 @@ function assertCapability(bundle: CertificateBundle, capability: Capability): vo
 async function authorizedBundle(context: McpToolContext): Promise<CertificateBundle> {
   const bundle = await context.store.loadBundle();
   if (!bundle) throw new McpToolError("not_paired", "not_paired");
-  const validation = validateCredentialBundle(bundle, {
+  const validation = validateCredentialChain(bundle, {
     store: context.store,
     state: context.state,
     deploymentName: context.deploymentName,
@@ -98,7 +98,7 @@ export async function walletStatus(context: McpToolContext): Promise<Record<stri
       lastCredentialError: context.store.lastCredentialError,
     };
   }
-  const validation = validateCredentialBundle(bundle, {
+  const validation = validateCredentialChain(bundle, {
     store: context.store,
     state: context.state,
     deploymentName: context.deploymentName,
