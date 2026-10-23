@@ -161,6 +161,11 @@ try {
     const depositMs = Date.now() - depositStarted;
     await page.screenshot({ path: path.join(outputDir, "wallet-funded-100.png"), fullPage: true });
 
+    const secondPage = await context.newPage();
+    await secondPage.goto(url);
+    await secondPage.locator(".passkey-row").first().click();
+    await secondPage.locator(".owner-console").waitFor({ timeout: 30_000 });
+
     await page.getByRole("button", { name: "Issue card", exact: true }).click();
     await page.getByTestId("pairing-code").fill(buyerPairing.code);
     await page.getByRole("button", { name: "Read pairing" }).click();
@@ -171,24 +176,25 @@ try {
     await page.getByTestId("issue-card").click();
     const payMs = await waitForIssue(page, payStarted);
 
-    await page.getByTestId("pairing-code").fill(treasuryPairing.code);
-    await page.getByRole("button", { name: "Read pairing" }).click();
-    await page.getByRole("button", { name: "Treasury" }).click();
-    await page.getByTestId("card-budget").fill("50");
-    await page.getByLabel("Expires").selectOption("1");
+    await secondPage.getByRole("button", { name: "Issue card", exact: true }).click();
+    await secondPage.getByTestId("pairing-code").fill(treasuryPairing.code);
+    await secondPage.getByRole("button", { name: "Read pairing" }).click();
+    await secondPage.getByRole("button", { name: "Treasury" }).click();
+    await secondPage.getByTestId("card-budget").fill("50");
+    await secondPage.getByLabel("Expires").selectOption("1");
     const treasuryStarted = Date.now();
-    await page.getByTestId("issue-card").click();
-    const treasuryMs = await waitForIssue(page, treasuryStarted);
+    await secondPage.getByTestId("issue-card").click();
+    const treasuryMs = await waitForIssue(secondPage, treasuryStarted);
 
-    await page.getByRole("button", { name: "Authorization", exact: true }).click();
-    await page.getByText("buyer", { exact: true }).waitFor();
-    await page.getByText("treasury", { exact: true }).waitFor();
-    const treeText = await page.locator(".tree-panel").textContent();
+    await secondPage.getByRole("button", { name: "Authorization", exact: true }).click();
+    await secondPage.getByText("buyer", { exact: true }).waitFor();
+    await secondPage.getByText("treasury", { exact: true }).waitFor();
+    const treeText = await secondPage.locator(".tree-panel").textContent();
     assert.match(treeText ?? "", /PAY/);
     assert.match(treeText ?? "", /TREASURY/);
     assert.match(treeText ?? "", /40 \/ 40/);
     assert.match(treeText ?? "", /50 \/ 50/);
-    await page.screenshot({ path: path.join(outputDir, "wallet-authorization-tree.png"), fullPage: true });
+    await secondPage.screenshot({ path: path.join(outputDir, "wallet-authorization-tree.png"), fullPage: true });
 
     const client = createPublicClient({ transport: http(rpcUrl) });
     const state = await ChainState.sync(client, deployment);
@@ -213,7 +219,7 @@ try {
     assert.equal(buyerStatus.remainingBudget, "40000000");
     assert.deepEqual(treasuryStatus.capabilities, ["TREASURY"]);
     assert.equal(treasuryStatus.remainingBudget, "50000000");
-    const ledger = await readLedger(page);
+    const ledger = await readLedger(secondPage);
     assert.equal(ledger.cards.length, 2);
     assert.ok(ledger.cards.every((card) => /^0x[0-9a-f]{64}$/i.test(card.issueTx)));
     assert.ok(ledger.cards.every((card) => /^0x[0-9a-f]{64}$/i.test(card.transferTx)));
@@ -224,6 +230,7 @@ try {
       timingsMs: { onboard: onboardMs, faucetDeposit100: depositMs, issuePay40: payMs, issueTreasury50: treasuryMs },
       cardTimings: ledger.cards.map((card) => card.timings),
       authorizationTree: { cards: 2, stewardRemaining: "10000000" },
+      crossTabIssuance: { pages: 2, cards: ledger.cards.length },
       mcp: [{ name: buyerStore.name, ...buyerStatus }, { name: treasuryStore.name, ...treasuryStatus }],
       screenshots: ["wallet-funded-100.png", "wallet-authorization-tree.png"],
     }, null, 2));

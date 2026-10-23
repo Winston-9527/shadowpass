@@ -27,7 +27,6 @@ export interface OnboardOptions {
   onCheckpoint?(ledger: WalletLedger): Promise<void>;
   progress?: ProgressReporter;
   nowSeconds?: bigint;
-  forceReplace?: boolean;
 }
 
 export interface OnboardResult {
@@ -52,24 +51,44 @@ export async function onboard(options: OnboardOptions): Promise<OnboardResult> {
     joinMs = performance.now() - started;
   }
 
-  const storedRoot = ledger.root && validRoot(ledger.root, options.bundle) ? rootToCert(ledger.root, options.bundle) : null;
-  const canKeepStored = storedRoot
-    && storedRoot.expiry > now + 60n
-    && !options.forceReplace;
-  const cert0 = canKeepStored ? storedRoot : issueRoot(
+  const domain = await options.gateway.registryDomain();
+  const provisionalRoot = issueRoot(
     options.bundle.sign,
     options.bundle.steward,
     3n,
-    rootExpiryFor(now) + (options.forceReplace ? DAY_SECONDS : 0n),
+    rootExpiryFor(now),
     options.bundle.view.vpk,
     options.bundle.view.w,
   );
+  const nf = BigInt(registerInput({ human: options.bundle.sign, cert0: provisionalRoot, domain, state }).nf_domain as string);
+  const registeredLeaf = await options.gateway.registryLeaf(nf);
+  const storedRoot = ledger.root && validRoot(ledger.root, options.bundle) ? rootToCert(ledger.root, options.bundle) : null;
+  const cert0 = registeredLeaf !== 0n
+    ? (storedRoot?.hash === registeredLeaf ? storedRoot : recoverRegisteredRoot(options.bundle, registeredLeaf, now))
+    : provisionalRoot;
+  if (!cert0) throw new Error("wallet already has a registered root certificate that cannot be recovered; root rotation is not supported");
   const root = serializeCert(cert0);
   const proofStarted = performance.now();
   let registrationTx = ledger.registrationTx;
   let chainMs = 0;
 
   if (state.rootTree.indexOf(cert0.hash) < 0) {
+    if (registeredLeaf !== 0n) {
+      state = await waitForChainState(options.gateway, (candidate) => candidate.rootTree.indexOf(cert0.hash) >= 0);
+      if (state.rootTree.indexOf(cert0.hash) < 0) throw new Error("registered root certificate is not visible on-chain");
+      ledger = {
+        ...ledger,
+        root,
+        rootRegistered: true,
+        onboardedAt: ledger.onboardedAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await options.onCheckpoint?.(ledger);
+      return {
+        ledger,
+        timings: { joinMs, proofMs: 0, chainMs: 0, totalMs: performance.now() - totalStarted },
+      };
+    }
     if (ledger.root?.hash !== root.hash) registrationTx = undefined;
     ledger = {
       ...ledger,
@@ -80,18 +99,12 @@ export async function onboard(options: OnboardOptions): Promise<OnboardResult> {
     };
     await options.onCheckpoint?.(ledger);
     options.progress?.("Generating registration proof");
-    const domain = await options.gateway.registryDomain();
     const input = registerInput({ human: options.bundle.sign, cert0, domain, state });
     const proof = await options.proofs.prove("main_reg", input);
     const proofMs = performance.now() - proofStarted;
-    const nf = BigInt(proof.publicSignals[2]!);
-    const oldLeaf = await options.gateway.registryLeaf(nf);
-    let siblingNodes: string[] = [];
+    const oldLeaf = await options.gateway.registryLeaf(BigInt(proof.publicSignals[2]!));
     if (oldLeaf !== 0n && oldLeaf !== cert0.hash) {
-      if (state.rootTree.indexOf(oldLeaf) < 0) {
-        throw new Error("previous root certificate is not visible on-chain");
-      }
-      siblingNodes = state.rootTree.proof(oldLeaf).siblings.map(String);
+      throw new Error("wallet was registered concurrently; retry to recover the existing root certificate");
     }
     options.progress?.("Registering root certificate");
     const chainStarted = performance.now();
@@ -100,7 +113,7 @@ export async function onboard(options: OnboardOptions): Promise<OnboardResult> {
       groupRoot: proof.publicSignals[0]!,
       nf: proof.publicSignals[2]!,
       leaf0: proof.publicSignals[3]!,
-      siblingNodes,
+      siblingNodes: [],
     });
     registrationTx = receipt.transaction;
     state = await waitForChainState(options.gateway, (candidate) => candidate.rootTree.indexOf(cert0.hash) >= 0);
@@ -158,4 +171,20 @@ function rootToCert(root: NonNullable<WalletLedger["root"]>, bundle: KeySet): Ce
     ownW: root.ownW ? { x: BigInt(root.ownW.x), y: BigInt(root.ownW.y) } : undefined,
     hash: BigInt(root.hash),
   };
+}
+
+function recoverRegisteredRoot(bundle: KeySet, registeredLeaf: bigint, now: bigint): Cert | null {
+  const maxAge = ROOT_VALIDITY_SECONDS / DAY_SECONDS + 1n;
+  for (let offset = 0n; offset <= maxAge; offset += 1n) {
+    const candidate = issueRoot(
+      bundle.sign,
+      bundle.steward,
+      3n,
+      rootExpiryFor(now - offset * DAY_SECONDS),
+      bundle.view.vpk,
+      bundle.view.w,
+    );
+    if (candidate.hash === registeredLeaf) return candidate;
+  }
+  return null;
 }

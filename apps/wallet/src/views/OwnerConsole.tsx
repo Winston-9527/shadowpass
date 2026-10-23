@@ -110,6 +110,9 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     setLedger(structuredClone(next));
   };
 
+  const walletLockName = `shadowpass:wallet:${config.deployment.chainId}:${session.bundle.sign.Ax.toString()}`;
+  const loadFreshLedger = () => loadLedger(config.deployment.chainId, config.network, session.bundle.sign.Ax);
+
   const refresh = async () => {
     const [state, logs] = await Promise.all([gateway.sync(), gateway.logs()]);
     setChainState(state);
@@ -165,48 +168,38 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
 
   const handleOnboard = () => run("onboard", async () => {
     if (!ledger) throw new Error("wallet ledger is not ready");
-    const result = await withCrossTabLock(`shadowpass:onboard:${session.bundle.sign.Ax}`, () => onboard({
-      ledger,
-      bundle: session.bundle,
-      gateway,
-      proofs,
-      onCheckpoint: persist,
-      progress: setProgress,
-    }));
-    const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
-    await persist(published);
-    await refresh();
-  });
-
-  const handleRenewRoot = () => run("onboard", async () => {
-    if (!ledger) throw new Error("wallet ledger is not ready");
-    const result = await withCrossTabLock(`shadowpass:onboard:${session.bundle.sign.Ax}`, () => onboard({
-      ledger,
-      bundle: session.bundle,
-      gateway,
-      proofs,
-      onCheckpoint: persist,
-      progress: setProgress,
-      forceReplace: true,
-    }));
-    const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
-    await persist(published);
+    await withCrossTabLock(walletLockName, async () => {
+      const current = await loadFreshLedger();
+      const result = await onboard({
+        ledger: current,
+        bundle: session.bundle,
+        gateway,
+        proofs,
+        onCheckpoint: persist,
+        progress: setProgress,
+      });
+      const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
+      await persist(published);
+    });
     await refresh();
   });
 
   const handleDeposit = (amount: bigint) => run("deposit", async () => {
     if (!ledger) throw new Error("wallet ledger is not ready");
-    const result = await deposit({
-      ledger,
-      bundle: session.bundle,
-      amount,
-      method: depositMethod,
-      gateway,
-      proofs,
-      onCheckpoint: persist,
-      progress: setProgress,
+    await withCrossTabLock(walletLockName, async () => {
+      const current = await loadFreshLedger();
+      const result = await deposit({
+        ledger: current,
+        bundle: session.bundle,
+        amount,
+        method: depositMethod,
+        gateway,
+        proofs,
+        onCheckpoint: persist,
+        progress: setProgress,
+      });
+      await persist(result.ledger);
     });
-    await persist(result.ledger);
     await refresh();
   });
 
@@ -260,46 +253,55 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     const budget = parseAmount(budgetInput);
     const days = Number(expiryDays);
     if (!Number.isSafeInteger(days) || days < 1 || days > 30) throw new Error("expiry must be between 1 and 30 days");
-    const now = BigInt(Math.floor(Date.now() / 1000));
-    if (ledger.root && now + BigInt(days) * 86_400n > BigInt(ledger.root.expiry)) {
-      throw new Error("expiry exceeds the root certificate's remaining lifetime");
-    }
-    const result = await withCrossTabLock(`shadowpass:issue:${ledger.root?.hash ?? "pending"}`, () => issueCard({
-      ledger,
-      bundle: session.bundle,
-      pairing: parsed,
-      capability: capValue(capability),
-      budget,
-      expiry: now + BigInt(days) * 86_400n,
-      gateway,
-      proofs,
-      mailer,
-      onCheckpoint: persist,
-      progress: setProgress,
-      nowSeconds: now,
-    }));
-    const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
-    await persist(published);
+    let deliveryError: string | undefined;
+    await withCrossTabLock(walletLockName, async () => {
+      const current = await loadFreshLedger();
+      const now = BigInt(Math.floor(Date.now() / 1000));
+      if (!current.root) throw new Error("onboard the wallet before issuing a card");
+      if (now + BigInt(days) * 86_400n > BigInt(current.root.expiry)) {
+        throw new Error("expiry exceeds the root certificate's remaining lifetime");
+      }
+      const result = await issueCard({
+        ledger: current,
+        bundle: session.bundle,
+        pairing: parsed,
+        capability: capValue(capability),
+        budget,
+        expiry: now + BigInt(days) * 86_400n,
+        gateway,
+        proofs,
+        mailer,
+        onCheckpoint: persist,
+        progress: setProgress,
+        nowSeconds: now,
+      });
+      const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
+      await persist(published);
+      deliveryError = result.deliveryError;
+    });
     setPairing(null);
     setPairInput("");
     if (location.pathname.endsWith("/pair") && location.hash) {
       history.replaceState(null, "", `${location.pathname}${location.search}`);
     }
     await refresh();
-    if (result.deliveryError) throw new Error(`Card is safe on-chain, but credential delivery failed: ${result.deliveryError}`);
+    if (deliveryError) throw new Error(`Card is safe on-chain, but credential delivery failed: ${deliveryError}`);
   });
 
   const handleRetryDelivery = (cardId: string) => run("issue", async () => {
     if (!ledger) throw new Error("wallet ledger is not ready");
-    const delivered = await withCrossTabLock(`shadowpass:delivery:${cardId}`, () => deliverCardCredential({
-      ledger,
-      cardId,
-      mailer,
-      onCheckpoint: persist,
-      progress: setProgress,
-    }));
-    const published = await publishOwnerRecords(mailer, session.bundle, delivered.ledger, persist);
-    await persist(published);
+    await withCrossTabLock(walletLockName, async () => {
+      const current = await loadFreshLedger();
+      const delivered = await deliverCardCredential({
+        ledger: current,
+        cardId,
+        mailer,
+        onCheckpoint: persist,
+        progress: setProgress,
+      });
+      const published = await publishOwnerRecords(mailer, session.bundle, delivered.ledger, persist);
+      await persist(published);
+    });
     await refresh();
   });
 
@@ -314,7 +316,6 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
   const availableBudget = tree?.stewardBudget ?? 0n;
   const currentRoot = ledger.root;
   const rootReady = Boolean(currentRoot && chainState && chainState.rootTree.indexOf(BigInt(currentRoot.hash)) >= 0);
-  const rootNeedsRenewal = rootReady && currentRoot && Number(currentRoot.expiry) * 1_000 - Date.now() < 7 * 86_400_000;
   const expiryInvalid = Number(expiryDays) > maximumExpiryDays;
 
   return (
@@ -371,12 +372,6 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
                 </div>
                 <div className="issue-note"><Clock3 size={15} /><span>Wait before issuing cards so deposits and card grants are less correlated.</span></div>
               </div>
-            )}
-            {rootNeedsRenewal && (
-              <button className="button secondary wide" onClick={handleRenewRoot} disabled={busy !== null || !chainState}>
-                {busy === "onboard" ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />}
-                Renew root certificate
-              </button>
             )}
           </section>
 

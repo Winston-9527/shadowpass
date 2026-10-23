@@ -117,6 +117,18 @@ describe("owner records and note recovery", () => {
     expect(restored.cards[0]?.name).toBe("Local buyer");
   });
 
+  it("ignores poisoned and excessive sequence numbers instead of advancing the owner cursor", async () => {
+    const { owner, ledger, state } = await fixture();
+    const mailbox = new MemoryMailbox();
+    await publishOwnerRecords(mailbox, owner, ledger);
+    const valid = structuredClone(mailbox.messages[1]) as { type: "owner_card"; seq: number; cardId: string; card: Record<string, unknown> };
+    mailbox.messages.push({ type: "owner_card", seq: Number.MAX_SAFE_INTEGER, cardId: "poison", card: {} });
+    mailbox.messages.push({ ...valid, seq: 1_003, card: { ...valid.card, name: "Sequence poison" } });
+    const restored = await restoreOwnerRecords(mailbox, owner, state, ledger);
+    expect(restored.nextOwnerSeq).toBe(3);
+    expect(restored.cards[0]?.name).toBe("采购 Agent");
+  });
+
   it("ignores forged cards that are not linked to the accepted root or Issued tree", async () => {
     const { owner, ledger, state } = await fixture();
     const mailbox = new MemoryMailbox();

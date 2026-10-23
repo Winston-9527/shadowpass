@@ -35,7 +35,7 @@ async function withLocalStorageLock<T>(name: string, task: () => Promise<T>, tim
 }
 
 /** Serializes card issuance across tabs; the Web Locks path is atomic in supporting browsers. */
-export async function withCrossTabLock<T>(name: string, task: () => Promise<T>, timeoutMs = 120_000): Promise<T> {
+export async function withCrossTabLock<T>(name: string, task: () => Promise<T>, timeoutMs = 180_000): Promise<T> {
   const locks = manager();
   if (locks) return locks.request(name, task);
   return withLocalStorageLock(name, task, timeoutMs);

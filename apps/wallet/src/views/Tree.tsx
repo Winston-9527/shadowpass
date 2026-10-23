@@ -10,6 +10,7 @@ import {
   type Note,
 } from "@shadowpass/sdk";
 import { formatAmount, type CardRecord, type WalletLedger } from "../flows/types";
+import { cardIsRevoked } from "../flows/snapshot";
 
 export interface AuthorizationCard extends Omit<CardRecord, "status"> {
   status: "active" | "expired" | "revoked" | "pending";
@@ -67,7 +68,7 @@ export function buildAuthorizationTree(
     .reduce((sum, note) => sum + note.q, 0n);
   const cards = ledger.cards.map((card): AuthorizationCard => {
     const note = noteFromCard(card);
-    const revoked = state.revoked.has(truncateKey(BigInt(card.cert.hash))) || state.revoked.has(stewardKey);
+    const revoked = cardIsRevoked(card, state) || state.revoked.has(stewardKey);
     const expired = nowSeconds > BigInt(card.expiry);
     const pending = card.status !== "delivered" || !note || state.notes.indexOf(noteCm(note)) < 0;
     const spent = spentForCard(card, bills);

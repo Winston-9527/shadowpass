@@ -16,7 +16,14 @@ import { serializeCert } from "./cert";
 import { waitForChainState, type WalletGateway } from "./chain";
 import { assertMemoInLogs, memoHex } from "./memo";
 import type { ProofService } from "./prove";
-import type { CredentialDelivery, PairingPayload, ProgressReporter, WalletLedger } from "./types";
+import type {
+  BudgetTransferCall,
+  CredentialDelivery,
+  PairingPayload,
+  PendingBudgetTransfer,
+  ProgressReporter,
+  WalletLedger,
+} from "./types";
 import { bytesToHex, hexToBytes } from "../lib/bytes";
 
 export interface CredentialMailer {
@@ -72,23 +79,143 @@ function noteFromStored(note: WalletLedger["notes"][number]["note"]): Note {
   };
 }
 
-function stripProof(proof: Awaited<ReturnType<ProofService["prove"]>>): { a: string[]; b: string[][]; c: string[] } {
-  return { a: [...proof.a], b: proof.b.map((row) => [...row]), c: [...proof.c] };
+function stripProof(proof: Awaited<ReturnType<ProofService["prove"]>>): BudgetTransferCall["proof"] {
+  return {
+    a: [proof.a[0], proof.a[1]],
+    b: [[proof.b[0][0], proof.b[0][1]], [proof.b[1][0], proof.b[1][1]]],
+    c: [proof.c[0], proof.c[1]],
+  };
+}
+
+function transferIsVisible(state: Awaited<ReturnType<WalletGateway["sync"]>>, pending: PendingBudgetTransfer): boolean {
+  return state.issued.indexOf(BigInt(pending.card.id)) >= 0
+    && state.notes.indexOf(BigInt(pending.call.cm1)) >= 0
+    && (!pending.hasChange || state.notes.indexOf(BigInt(pending.call.cm2)) >= 0);
+}
+
+function assertPendingMemos(logs: unknown[], pending: PendingBudgetTransfer): void {
+  if (!pending.card.note) throw new Error("pending transfer is missing the Agent note");
+  assertMemoInLogs(logs, noteFromStored(pending.card.note), hexToBytes(pending.call.memo1.slice(2)));
+  if (pending.changeNote) assertMemoInLogs(logs, noteFromStored(pending.changeNote), hexToBytes(pending.call.memo2.slice(2)));
+}
+
+function commitPendingTransfer(
+  input: WalletLedger,
+  pending: PendingBudgetTransfer,
+  transferTx: string | undefined,
+  timings: { proofMs: number; chainMs: number; totalMs: number },
+): WalletLedger {
+  if (!pending.card.note) throw new Error("pending transfer is missing the Agent note");
+  const card: WalletLedger["cards"][number] = {
+    ...pending.card,
+    status: "pending_delivery",
+    timings,
+    ...(transferTx ? { transferTx } : {}),
+  };
+  const createdAt = pending.createdAt;
+  const notes: WalletLedger["notes"] = [
+    ...input.notes.filter((entry) => entry.cm !== pending.parentCm && entry.cm !== pending.call.cm1 && entry.cm !== pending.call.cm2),
+    { note: pending.card.note, cm: pending.call.cm1, tx: transferTx ?? "", kind: "card", createdAt },
+    ...(pending.changeNote ? [{ note: pending.changeNote, cm: pending.call.cm2, tx: transferTx ?? "", kind: "change" as const, createdAt }] : []),
+  ];
+  const ledger: WalletLedger = {
+    ...input,
+    notes,
+    cards: [...input.cards.filter((candidate) => candidate.id !== pending.card.id), card],
+    updatedAt: new Date().toISOString(),
+  };
+  delete ledger.pendingTransfer;
+  return ledger;
+}
+
+async function resumePendingTransfer(
+  options: IssueCardOptions,
+  initial: Awaited<ReturnType<WalletGateway["sync"]>>,
+  started: number,
+): Promise<IssueCardResult> {
+  const pending = options.ledger.pendingTransfer;
+  if (!pending) throw new Error("pending transfer is missing");
+  const proofMs = pending.card.timings.proofMs;
+  const chainStarted = performance.now();
+  let state = initial;
+  let transferTx = pending.card.transferTx;
+  let receipt: Awaited<ReturnType<WalletGateway["relay"]>> | undefined;
+
+  if (!transferIsVisible(state, pending)) {
+    options.progress?.("Retrying pending Agent budget transfer");
+    try {
+      receipt = await options.gateway.relay("transferBudget", {
+        proof: pending.call.proof,
+        noteRoot: pending.call.noteRoot,
+        revokedRoot: pending.call.revokedRoot,
+        nullifier: pending.call.nullifier,
+        cm1: pending.call.cm1,
+        cm2: pending.call.cm2,
+        memo1: pending.call.memo1,
+        memo2: pending.call.memo2,
+      });
+      transferTx = receipt.transaction;
+    } catch (cause) {
+      state = await options.gateway.sync();
+      if (!transferIsVisible(state, pending)) throw cause;
+    }
+  }
+  assertPendingMemos(receipt?.logs ?? await options.gateway.logs(), pending);
+
+  state = await waitForChainState(options.gateway, (candidate) => transferIsVisible(candidate, pending));
+  if (!transferIsVisible(state, pending)) {
+    throw new Error("pending Agent budget transfer is not visible on-chain; keep this tab closed and retry later");
+  }
+  let ledger = commitPendingTransfer(options.ledger, pending, transferTx, {
+    proofMs,
+    chainMs: performance.now() - chainStarted,
+    totalMs: performance.now() - started,
+  });
+  await options.onCheckpoint?.(ledger);
+
+  ledger = {
+    ...ledger,
+    cards: ledger.cards.map((card) => card.id === pending.card.id
+      ? { ...card, timings: { proofMs, chainMs: performance.now() - chainStarted, totalMs: performance.now() - started } }
+      : card),
+    updatedAt: new Date().toISOString(),
+  };
+  await options.onCheckpoint?.(ledger);
+  const timings = ledger.cards.find((card) => card.id === pending.card.id)?.timings
+    ?? { proofMs, chainMs: 0, totalMs: performance.now() - started };
+  try {
+    const delivered = await deliverCardCredential({
+      ledger,
+      cardId: pending.card.id,
+      mailer: options.mailer,
+      onCheckpoint: options.onCheckpoint,
+      progress: options.progress,
+    });
+    return { ledger: delivered.ledger, cardId: pending.card.id, mailboxId: delivered.mailboxId, timings };
+  } catch (cause) {
+    return {
+      ledger,
+      cardId: pending.card.id,
+      deliveryError: cause instanceof Error ? cause.message : "credential delivery failed",
+      timings,
+    };
+  }
 }
 
 export async function issueCard(options: IssueCardOptions): Promise<IssueCardResult> {
   const started = performance.now();
   const now = options.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
   if (!options.ledger.root) throw new Error("onboard the wallet before issuing a card");
+  let state = await options.gateway.sync();
+  const root = options.ledger.root;
+  const rootHash = BigInt(root.hash);
+  if (state.rootTree.indexOf(rootHash) < 0) throw new Error("root certificate is not registered on-chain");
+  if (options.ledger.pendingTransfer) return resumePendingTransfer(options, state, started);
   if (options.capability !== 1n && options.capability !== 2n) throw new Error("capability must be PAY or TREASURY");
   if (options.budget <= 0n) throw new Error("budget must be greater than zero");
   if (options.expiry <= now) throw new Error("card expiry must be in the future");
   if (options.expiry > BigInt(options.ledger.root.expiry)) throw new Error("card expiry exceeds the root certificate");
 
-  let state = await options.gateway.sync();
-  const root = options.ledger.root;
-  const rootHash = BigInt(root.hash);
-  if (state.rootTree.indexOf(rootHash) < 0) throw new Error("root certificate is not registered on-chain");
   const spendable = options.ledger.notes
     .filter((entry) => entry.kind === "deposit" || entry.kind === "change")
     .map((entry) => ({ entry, note: noteFromStored(entry.note) }))
@@ -140,8 +267,7 @@ export async function issueCard(options: IssueCardOptions): Promise<IssueCardRes
   const proofStarted = performance.now();
   const proof = await options.proofs.prove("budget_transfer", transfer.input);
   const proofMs = performance.now() - proofStarted;
-  options.progress?.("Transferring Agent budget");
-  const receipt = await options.gateway.relay("transferBudget", {
+  const call: BudgetTransferCall = {
     proof: stripProof(proof),
     noteRoot: proof.publicSignals[0]!,
     revokedRoot: proof.publicSignals[1]!,
@@ -150,9 +276,7 @@ export async function issueCard(options: IssueCardOptions): Promise<IssueCardRes
     cm2: proof.publicSignals[4]!,
     memo1: memoHex(agentMemo),
     memo2: memoHex(changeMemo),
-  });
-  assertMemoInLogs(receipt.logs, transfer.out1, agentMemo);
-  assertMemoInLogs(receipt.logs, transfer.out2, changeMemo);
+  };
   const cardId = cert1.hash.toString();
   const chain: CertificateBundle["chain"] = [root, serializedCert1];
   const certificateBundle: CertificateBundle = {
@@ -169,46 +293,67 @@ export async function issueCard(options: IssueCardOptions): Promise<IssueCardRes
     bundle: certificateBundle,
   };
   const createdAt = new Date().toISOString();
+  const card: WalletLedger["cards"][number] = {
+    id: cardId,
+    name: options.pairing.name,
+    agentPk: { x: options.pairing.agentPk.x.toString(), y: options.pairing.agentPk.y.toString() },
+    boxPk: options.pairing.boxPk,
+    cap: options.capability.toString(),
+    budget: q1.toString(),
+    expiry: options.expiry.toString(),
+    status: "issued",
+    cert: serializedCert1,
+    note: storedNote(transfer.out1),
+    issueTx: issueTransaction ?? options.ledger.cards.find((candidate) => candidate.id === cardId)?.issueTx ?? "",
+    delivery,
+    timings: { proofMs, chainMs: 0, totalMs: performance.now() - started },
+    createdAt,
+  };
+  const pending: PendingBudgetTransfer = {
+    parentCm: parent.entry.cm,
+    card,
+    changeNote: q2 > 0n ? storedNote(transfer.out2) : null,
+    call,
+    hasChange: q2 > 0n,
+    createdAt,
+  };
   let ledger: WalletLedger = {
     ...options.ledger,
-    notes: [
-      ...options.ledger.notes.filter((entry) => entry.cm !== parent.entry.cm),
-      { note: storedNote(transfer.out1), cm: noteCm(transfer.out1).toString(), tx: receipt.transaction, kind: "card", createdAt },
-      ...(q2 > 0n ? [{ note: storedNote(transfer.out2), cm: noteCm(transfer.out2).toString(), tx: receipt.transaction, kind: "change" as const, createdAt }] : []),
-    ],
-    cards: [
-      ...options.ledger.cards.filter((card) => card.id !== cardId),
-      {
-        id: cardId,
-        name: options.pairing.name,
-        agentPk: { x: options.pairing.agentPk.x.toString(), y: options.pairing.agentPk.y.toString() },
-        boxPk: options.pairing.boxPk,
-        cap: options.capability.toString(),
-        budget: q1.toString(),
-        expiry: options.expiry.toString(),
-        status: "pending_delivery",
-        cert: serializedCert1,
-        note: storedNote(transfer.out1),
-        issueTx: issueTransaction ?? options.ledger.cards.find((card) => card.id === cardId)?.issueTx ?? "",
-        transferTx: receipt.transaction,
-        delivery,
-        timings: { proofMs, chainMs, totalMs: performance.now() - started },
-        createdAt,
-      },
-    ],
+    pendingTransfer: pending,
     updatedAt: createdAt,
   };
   await options.onCheckpoint?.(ledger);
-  const visible = await waitForChainState(
-    options.gateway,
-    (candidate) => candidate.issued.indexOf(cert1.hash) >= 0
-      && candidate.notes.indexOf(noteCm(transfer.out1)) >= 0
-      && (q2 === 0n || candidate.notes.indexOf(noteCm(transfer.out2)) >= 0),
-  );
-  if (visible.issued.indexOf(cert1.hash) < 0 || visible.notes.indexOf(noteCm(transfer.out1)) < 0
-    || (q2 > 0n && visible.notes.indexOf(noteCm(transfer.out2)) < 0)) {
-    throw new Error("Agent budget transfer is not visible on-chain; retry delivery after the chain catches up");
+  options.progress?.("Transferring Agent budget");
+  let receipt: Awaited<ReturnType<WalletGateway["relay"]>> | undefined;
+  try {
+    receipt = await options.gateway.relay("transferBudget", {
+      proof: call.proof,
+      noteRoot: call.noteRoot,
+      revokedRoot: call.revokedRoot,
+      nullifier: call.nullifier,
+      cm1: call.cm1,
+      cm2: call.cm2,
+      memo1: call.memo1,
+      memo2: call.memo2,
+    });
+  } catch (cause) {
+    state = await options.gateway.sync();
+    if (!transferIsVisible(state, pending)) throw cause;
   }
+  assertPendingMemos(receipt?.logs ?? await options.gateway.logs(), pending);
+  state = await waitForChainState(
+    options.gateway,
+    (candidate) => transferIsVisible(candidate, pending),
+  );
+  if (!transferIsVisible(state, pending)) {
+    throw new Error("Agent budget transfer is not visible on-chain; retry the pending transfer after the chain catches up");
+  }
+  ledger = commitPendingTransfer(options.ledger, pending, receipt?.transaction, {
+    proofMs,
+    chainMs: performance.now() - chainStarted,
+    totalMs: performance.now() - started,
+  });
+  await options.onCheckpoint?.(ledger);
   chainMs = performance.now() - chainStarted;
   ledger = {
     ...ledger,

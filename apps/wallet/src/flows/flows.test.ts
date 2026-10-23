@@ -38,15 +38,18 @@ class FakeProofs implements ProofService {
 class FakeGateway implements WalletGateway {
   readonly state = new ChainState();
   readonly registryLeaves = new Map<string, bigint>();
+  readonly emittedLogs: unknown[] = [];
   registrations = 0;
   transfers = 0;
+  failTransferBeforeCommit = false;
+  loseTransferResponseAfterCommit = false;
 
   async sync(): Promise<ChainState> {
     return this.state;
   }
 
   async logs(): Promise<unknown[]> {
-    return [];
+    return this.emittedLogs;
   }
 
   async registryDomain(): Promise<bigint> {
@@ -85,6 +88,7 @@ class FakeGateway implements WalletGateway {
     }
     if (action === "issue") this.state.issued.insert(BigInt(String(args.certHash)));
     if (action === "transferBudget") {
+      if (this.failTransferBeforeCommit) throw new Error("transfer response lost");
       this.transfers += 1;
       const cm1 = BigInt(String(args.cm1));
       const cm2 = BigInt(String(args.cm2));
@@ -94,6 +98,8 @@ class FakeGateway implements WalletGateway {
         { eventName: "NoteMemo", args: { cm: cm1, memo: String(args.memo1) }, blockNumber: 2n, logIndex: 0 },
         { eventName: "NoteMemo", args: { cm: cm2, memo: String(args.memo2) }, blockNumber: 2n, logIndex: 1 },
       );
+      this.emittedLogs.push(...logs);
+      if (this.loseTransferResponseAfterCommit) throw new Error("transfer response lost after commit");
     }
     const transaction = action === "issue" ? TX_ISSUE : action === "transferBudget" ? TX_TRANSFER : TX;
     return { transaction, blockNumber: "2", logs };
@@ -213,7 +219,7 @@ describe("wallet opening and card flows", () => {
       onCheckpoint: async () => { checkpoints += 1; },
       nowSeconds: 2_000_000_000n,
     });
-    expect(checkpoints).toBe(2);
+    expect(checkpoints).toBe(3);
     expect(failed.deliveryError).toMatch(/mailbox offline/);
     expect(failed.ledger.cards[0]).toMatchObject({ status: "pending_delivery", transferTx: TX_TRANSFER });
     expect(gateway.state.notes.leaves).toHaveLength(3);
@@ -228,21 +234,113 @@ describe("wallet opening and card flows", () => {
     expect(gateway.transfers).toBe(transfers);
   });
 
-  it("replaces an existing root using root-tree siblings instead of group-tree siblings", async () => {
+  it("persists a budget transfer intent before relay and resumes the same proof after a lost response", async () => {
+    const { bundle, ledger, root } = await ownerFixture();
+    const gateway = new FakeGateway();
+    gateway.state.rootTree.insert(BigInt(root!.hash));
+    gateway.failTransferBeforeCommit = true;
+    const depositNote = createNote(bundle.steward, 100_000_000n, [BigInt(root!.hash)]);
+    gateway.state.notes.insert(noteCm(depositNote));
+    ledger.notes.push({
+      note: {
+        own: depositNote.own.map(String) as [string, string],
+        q: depositNote.q.toString(),
+        lin: depositNote.lin.map(String) as WalletLedger["notes"][number]["note"]["lin"],
+        rho: depositNote.rho.toString(),
+      },
+      cm: noteCm(depositNote).toString(),
+      tx: TX,
+      kind: "deposit",
+      createdAt: new Date().toISOString(),
+    });
+    const agent = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 73));
+    const options = {
+      bundle,
+      pairing: { v: 1 as const, name: "采购 Agent", agentPk: { x: agent.sign.Ax, y: agent.sign.Ay }, boxPk: bytesHex(agent.box.publicKey), pair: "aa".repeat(16) },
+      capability: 1n,
+      budget: 40_000_000n,
+      expiry: 2_000_100_000n,
+      gateway,
+      proofs: new FakeProofs(),
+      mailer: { async send() { return 1; } },
+      nowSeconds: 2_000_000_500n,
+    };
+    let checkpoint: WalletLedger | undefined;
+    await expect(issueCard({
+      ...options,
+      ledger,
+      onCheckpoint: async (next) => { checkpoint = structuredClone(next); },
+    })).rejects.toThrow(/response lost/);
+    expect(checkpoint?.pendingTransfer).toBeDefined();
+    expect(checkpoint?.pendingTransfer?.call.cm1).toBeTruthy();
+    expect(checkpoint?.pendingTransfer?.call.proof).not.toHaveProperty("publicSignals");
+    expect(gateway.transfers).toBe(0);
+
+    gateway.failTransferBeforeCommit = false;
+    const retried = await issueCard({ ...options, ledger: checkpoint! });
+    expect(gateway.transfers).toBe(1);
+    expect(retried.ledger.pendingTransfer).toBeUndefined();
+    expect(retried.ledger.cards).toHaveLength(1);
+    expect(retried.ledger.cards[0]).toMatchObject({ status: "delivered", transferTx: TX_TRANSFER });
+    expect(retried.ledger.notes.some((entry) => entry.kind === "change" && entry.note.q === "60000000")).toBe(true);
+  });
+
+  it("reconciles a committed budget transfer after its relay response is lost without spending twice", async () => {
+    const { bundle, ledger, root } = await ownerFixture();
+    const gateway = new FakeGateway();
+    gateway.state.rootTree.insert(BigInt(root!.hash));
+    gateway.loseTransferResponseAfterCommit = true;
+    const depositNote = createNote(bundle.steward, 100_000_000n, [BigInt(root!.hash)]);
+    gateway.state.notes.insert(noteCm(depositNote));
+    ledger.notes.push({
+      note: {
+        own: depositNote.own.map(String) as [string, string],
+        q: depositNote.q.toString(),
+        lin: depositNote.lin.map(String) as WalletLedger["notes"][number]["note"]["lin"],
+        rho: depositNote.rho.toString(),
+      },
+      cm: noteCm(depositNote).toString(),
+      tx: TX,
+      kind: "deposit",
+      createdAt: new Date().toISOString(),
+    });
+    const agent = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 74));
+    const checkpoints: WalletLedger[] = [];
+    const result = await issueCard({
+      ledger,
+      bundle,
+      pairing: { v: 1, name: "采购 Agent", agentPk: { x: agent.sign.Ax, y: agent.sign.Ay }, boxPk: bytesHex(agent.box.publicKey), pair: "bb".repeat(16) },
+      capability: 1n,
+      budget: 40_000_000n,
+      expiry: 2_000_100_000n,
+      gateway,
+      proofs: new FakeProofs(),
+      mailer: { async send() { return 2; } },
+      onCheckpoint: async (next) => { checkpoints.push(structuredClone(next)); },
+      nowSeconds: 2_000_000_500n,
+    });
+    expect(gateway.transfers).toBe(1);
+    expect(checkpoints.some((next) => next.pendingTransfer)).toBe(true);
+    expect(result.ledger.pendingTransfer).toBeUndefined();
+    expect(result.ledger.cards[0]).toMatchObject({ status: "delivered" });
+    expect(result.ledger.notes.some((entry) => entry.kind === "change" && entry.note.q === "60000000")).toBe(true);
+  });
+
+  it("recovers the registered cert0 on a later UTC day instead of replacing root lineage", async () => {
     const bundle = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 21));
     const gateway = new FakeGateway();
     const opened = await onboard({ ledger: emptyLedger(31337, "anvil", bundle.sign.Ax), bundle, gateway, proofs: new FakeProofs(), nowSeconds: 2_000_000_000n });
-    const renewed = await onboard({
-      ledger: opened.ledger,
+    const recovered = await onboard({
+      ledger: emptyLedger(31337, "anvil", bundle.sign.Ax),
       bundle,
       gateway,
       proofs: new FakeProofs(),
-      nowSeconds: 2_000_000_100n,
-      forceReplace: true,
+      nowSeconds: 2_000_000_000n + 86_400n,
     });
-    expect(gateway.registrations).toBe(2);
-    expect(renewed.ledger.root?.hash).not.toBe(opened.ledger.root?.hash);
-    expect(gateway.state.rootTree.indexOf(BigInt(renewed.ledger.root!.hash))).toBe(0);
+    expect(gateway.registrations).toBe(1);
+    expect(recovered.ledger.root?.hash).toBe(opened.ledger.root?.hash);
+    expect(recovered.ledger.rootRegistered).toBe(true);
+    expect(gateway.state.rootTree.leaves).toHaveLength(1);
   });
 
   it("persists cert0 before registration so a timed-out transaction can be reconciled", async () => {

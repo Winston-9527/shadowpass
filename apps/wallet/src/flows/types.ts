@@ -49,6 +49,26 @@ export interface CardRecord {
   createdAt: string;
 }
 
+export interface BudgetTransferCall {
+  proof: Omit<CalldataProof, "publicSignals">;
+  noteRoot: string;
+  revokedRoot: string;
+  nullifier: string;
+  cm1: string;
+  cm2: string;
+  memo1: string;
+  memo2: string;
+}
+
+export interface PendingBudgetTransfer {
+  parentCm: string;
+  card: CardRecord;
+  changeNote: CertificateBundle["note"] | null;
+  call: BudgetTransferCall;
+  hasChange: boolean;
+  createdAt: string;
+}
+
 export interface WalletLedger {
   v: 1;
   chainId: number;
@@ -61,6 +81,7 @@ export interface WalletLedger {
   ownerRootSeq?: number;
   ownerRootVersion?: string;
   nextOwnerSeq?: number;
+  pendingTransfer?: PendingBudgetTransfer;
   notes: StoredNote[];
   cards: CardRecord[];
   updatedAt: string;

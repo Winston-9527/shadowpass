@@ -70,14 +70,14 @@ VITE_MAILBOX_URL=http://localhost:8787
 
 ## 开通、充值与发卡
 
-1. 创建 passkey 后，钱包依次调用 facilitator 的 `join`、在浏览器生成 `main_reg` 证明并调用 `register`，得到约 31 天有效的根证书。根证书有效期按 UTC 天稳定生成，注册前先写入本地；临近过期时可在钱包中续期并原位替换根叶子。
+1. 创建 passkey 后，钱包依次调用 facilitator 的 `join`、在浏览器生成 `main_reg` 证明并调用 `register`，得到约 31 天有效的根证书。根证书有效期按 UTC 天稳定生成，注册前先写入本地。根证书不可轮换；本地数据丢失或隔日重新打开时，通过 nullifier 查询已注册叶子并逐日回扫，找回原来的 cert0，绝不替换旧 lineage。
 2. 入金支持两条路：
    - 一键领取固定 10 / 50 / 100，浏览器生成 `budget_mint` 证明，facilitator 代付 `faucetDeposit`。
    - MetaMask 等 EIP-1193 钱包连接 Anvil，本地生成 `budget_mint` 证明，外部钱包先向 token 发送 `approve`，再向 `Gate.deposit` 提交证明和密文备忘。
 3. 发卡可粘贴配对码，也可打开 `/pair#<code>`。每张卡签发 cert1、上链 `issue`、生成 `budget_transfer` 证明并上链转移预算。
 4. 给 Agent 的票据用 Agent 的信箱公钥加密，管家找零票据用主人信箱公钥加密。交易回执中的 `NoteMemo` 必须与本地密文一致。
-5. 授权树显示主人、管家和各 Agent 卡的能力、额度、剩余、有效期与状态。恢复时从 `/slot` 取回种子，先扫描 `NoteMemo` 重建票据，再按 `cardId` 合并逐卡 `owner_card` 记录；记录必须通过签名、根关系和链上 `Issued` 事件核对。
-6. 凭证投递失败时卡片保留 `pending_delivery` 和完整加密凭证包，重试只重投原包，不重复发卡或转账；发卡和投递均使用跨标签页 Web Locks。
+5. 授权树显示主人、管家和各 Agent 卡的能力、额度、剩余、有效期与状态，并按 `Revocations` 链上状态展示吊销。恢复时从 `/slot` 取回种子，先扫描 `NoteMemo` 重建票据，再按 `cardId` 合并逐卡 `owner_card` 记录；记录必须通过签名、根关系和链上 `Issued` 事件核对，`seq` 只从通过校验的记录推进且限制单次跳号。
+6. `budget_transfer` 代付前先保存 cert1、两张输出票据、备忘和 calldata；响应丢失时按 `cm1`/`cm2` 核链并复用同一证明，不重复扣预算。凭证投递失败时卡片保留 `pending_delivery` 和完整加密凭证包，重试只重投原包。开通、入金、发卡和重投共用一个跨标签页钱包锁，拿到锁后重新读取最新本地账本。
 
 Anvil 的 `faucetDeposit` 是整个代币合约每天一次，不是每个钱包一次。重复跑真实链 E2E 前要重启 `npm run dev:chain`，否则第二次会触发 faucet 限额。
 

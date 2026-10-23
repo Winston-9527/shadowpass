@@ -19,6 +19,8 @@ export interface OwnerMailboxClient {
 
 type VerifiedOwnerCardRecord = Omit<OwnerCardRecord, "card"> & { card: CardRecord };
 
+const MAX_OWNER_SEQ_ADVANCE = 1_000;
+
 function isHexScalar(value: unknown): value is string {
   return typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value);
 }
@@ -155,16 +157,18 @@ export async function restoreOwnerRecords(
   input: WalletLedger,
 ): Promise<WalletLedger> {
   const entries = await mailbox.pollAll(bundle.box, 0);
-  let maxSeq = input.nextOwnerSeq ? input.nextOwnerSeq - 1 : 0;
+  const localSeqs = [input.ownerRootSeq, ...input.cards.map((card) => card.ownerSeq)]
+    .filter((seq): seq is number => Number.isSafeInteger(seq) && Number(seq) > 0);
+  let maxSeq = localSeqs.length ? Math.max(...localSeqs) : 0;
   let rootRecord: OwnerRootRecord | null = null;
   for (const entry of entries) {
     if (!entry.decoded) continue;
     const raw = entry.value;
     if (!raw || typeof raw !== "object") continue;
-    const seq = (raw as { seq?: unknown }).seq;
-    if (Number.isSafeInteger(seq) && Number(seq) > maxSeq) maxSeq = Number(seq);
     const rootCandidate = validRootRecord(raw, bundle, state);
-    if (rootCandidate && (!rootRecord || rootCandidate.seq > rootRecord.seq)) rootRecord = rootCandidate;
+    if (!rootCandidate || rootCandidate.seq > maxSeq + MAX_OWNER_SEQ_ADVANCE) continue;
+    maxSeq = Math.max(maxSeq, rootCandidate.seq);
+    if (!rootRecord || rootCandidate.seq > rootRecord.seq) rootRecord = rootCandidate;
   }
   const root = rootRecord?.cert0 ?? (input.root && state.rootTree.indexOf(BigInt(input.root.hash)) >= 0 ? input.root : null);
   let cards = [...input.cards];
@@ -173,7 +177,8 @@ export async function restoreOwnerRecords(
     for (const entry of entries) {
       if (!entry.decoded) continue;
       const card = validCardRecord(entry.value, root, state);
-      if (!card) continue;
+      if (!card || card.seq > maxSeq + MAX_OWNER_SEQ_ADVANCE) continue;
+      maxSeq = Math.max(maxSeq, card.seq);
       const previous = cardRecords.get(card.cardId);
       if (!previous || card.seq > previous.seq) cardRecords.set(card.cardId, card);
     }
