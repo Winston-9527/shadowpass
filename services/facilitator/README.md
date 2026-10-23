@@ -16,8 +16,10 @@ and `FACILITATOR_RATE_LIMIT` are read from the environment. Never commit `.env` 
 
 ## Endpoints
 
-See `docs/INTERFACES.md` §14. The service returns x402 verify/settle JSON plus relay transaction hashes,
-and records latency breakdowns at `GET /metrics`.
+See `docs/INTERFACES.md` §14. `POST /relay/:action` supports `join`, `register`, `faucetDeposit`, `issue`,
+`transferBudget`, `revoke` and `registerState`. Every call is simulated first, serialized for nonce safety,
+rate-limited by IP, and returns only sanitized error codes. `faucetDeposit` is limited to once per IP per day.
+Latency breakdowns are available at `GET /metrics`.
 
 For Vercel, expose `createFacilitatorApp()` from a serverless entrypoint and bind the same environment
 variables in the project settings. The demo can also run on any Node 24 host.

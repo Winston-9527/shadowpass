@@ -4,9 +4,7 @@
     "rootDir": ".",
     "outDir": "dist",
     "allowJs": true,
-    "checkJs": false,
-    "baseUrl": ".",
-    "paths": { "@shadowpass/sdk": ["./src/sdk.d.ts"] }
+    "checkJs": false
   },
   "include": ["src", "test"]
 }

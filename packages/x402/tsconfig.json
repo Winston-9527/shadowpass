@@ -2,9 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
-    "outDir": "dist",
-    "baseUrl": ".",
-    "paths": { "@shadowpass/sdk": ["./src/sdk.d.ts"] }
+    "outDir": "dist"
   },
   "include": ["src", "test"]
 }

@@ -1,17 +1,10 @@
-import {
-  encodeAbiParameters,
-  type Address,
-  type Hex,
-} from "viem";
-import {
-  x402Client,
-  type SpendControls,
-} from "@x402/core/client";
+import { encodeAbiParameters, type Address, type Hex } from "viem";
+import { x402Client, type SpendControls } from "@x402/core/client";
 import type {
   Network,
   PaymentPayloadResult,
-  PaymentRequirements,
   PaymentPayloadContext,
+  PaymentRequirements,
   SchemeNetworkClient,
 } from "@x402/core/types";
 import { reqHash } from "@shadowpass/sdk";
@@ -24,6 +17,8 @@ import {
   type ShadowpassPaymentBuilder,
 } from "./types.js";
 
+const resourceUrls = new WeakMap<PaymentRequirements, string>();
+
 export interface AssembleShadowpassPayloadInput {
   requirements: PaymentRequirements;
   resourceUrl: string;
@@ -34,14 +29,13 @@ export interface AssembleShadowpassPayloadInput {
   ct: string[];
   budget: ShadowpassPayload["budget"];
   memoChange: Hex;
-  proofMs?: number;
 }
 
 export function assembleShadowpassPayload(input: AssembleShadowpassPayloadInput): ShadowpassPayload {
   const payout = input.requirements.extra?.payout;
-  if (typeof payout !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(payout)) {
-    throw new Error("payment requirement extra.payout is not an address");
-  }
+  const method = input.requirements.extra?.method;
+  if (typeof payout !== "string") throw new Error("missing_payout");
+  if (typeof method !== "string") throw new Error("missing_method");
   const requestHash = reqHash({
     network: input.requirements.network,
     asset: input.requirements.asset as Address,
@@ -49,10 +43,6 @@ export function assembleShadowpassPayload(input: AssembleShadowpassPayloadInput)
     payTo: input.requirements.payTo as Address,
     resource: input.resourceUrl,
   });
-  const params = encodeAbiParameters(
-    [{ type: "address" }, { type: "bytes32" }],
-    [input.requirements.payTo as Address, requestHash],
-  );
   return {
     D: input.ct.length - 6,
     proof: input.proof,
@@ -60,69 +50,59 @@ export function assembleShadowpassPayload(input: AssembleShadowpassPayloadInput)
     nowTs: String(input.nowTs),
     action: {
       target: payout as Address,
-      method: PAY_METHOD,
+      method: method as Hex,
       amount: input.requirements.amount,
       nonce: String(input.nonce),
-      params,
+      params: encodeAbiParameters(
+        [{ type: "address" }, { type: "bytes32" }],
+        [input.requirements.payTo as Address, requestHash],
+      ),
     },
     ct: input.ct,
     budget: input.budget,
     memoChange: input.memoChange,
-    ...(input.proofMs === undefined ? {} : { timings: { proofMs: input.proofMs } }),
   };
 }
 
-export interface ShadowpassClientOptions {
-  builder: ShadowpassPaymentBuilder;
-  memoChange: Hex;
-}
-
-export class ShadowpassClient implements SchemeNetworkClient {
+export class ShadowpassClientScheme implements SchemeNetworkClient {
   readonly scheme = SHADOWPASS_SCHEME;
-  private readonly builder: ShadowpassPaymentBuilder;
-  private readonly memoChange: Hex;
-  private resourceUrl?: string;
 
-  constructor(options: ShadowpassClientOptions) {
-    this.builder = options.builder;
-    this.memoChange = options.memoChange;
-  }
-
-  setResourceUrl(resourceUrl: string): void {
-    this.resourceUrl = resourceUrl;
-  }
+  constructor(private readonly builder: ShadowpassPaymentBuilder) {}
 
   async createPaymentPayload(
     x402Version: number,
-    paymentRequirements: PaymentRequirements,
+    requirements: PaymentRequirements,
     _context?: PaymentPayloadContext,
   ): Promise<PaymentPayloadResult> {
-    if (!this.resourceUrl) {
-      throw new Error("shadowpass client resource URL was not set by beforePaymentCreation");
-    }
-    const payload = await this.builder.build({
-      requirements: paymentRequirements,
-      resourceUrl: this.resourceUrl,
-      memoChange: this.memoChange,
-    });
+    const resourceUrl = resourceUrls.get(requirements);
+    if (!resourceUrl) throw new Error("resource_url_missing");
+    const payload = await this.builder.buildPayment(requirements, resourceUrl);
     return { x402Version, payload: payload as unknown as Record<string, unknown> };
   }
 }
 
-export interface CreateShadowpassClientOptions extends ShadowpassClientOptions {
-  network?: Network;
+export interface CreateShadowpassClientOptions {
+  builder: ShadowpassPaymentBuilder;
   spendControls: SpendControls | false;
+  network?: Network;
 }
 
 export function createShadowpassClient(options: CreateShadowpassClientOptions): x402Client {
-  const scheme = new ShadowpassClient(options);
+  const scheme = new ShadowpassClientScheme(options.builder);
   const network = options.network ?? SHADOWPASS_NETWORK;
-  const client = x402Client.fromConfig({
-    schemes: [{ network, client: scheme }],
-    spendControls: options.spendControls,
-  })
+  return x402Client
+    .fromConfig({
+      schemes: [{ network, client: scheme }],
+      spendControls: options.spendControls,
+    })
     .onBeforePaymentCreation(async ({ paymentRequired }) => {
-      scheme.setResourceUrl(paymentRequired.resource.url);
+      for (const requirements of paymentRequired.accepts) {
+        resourceUrls.set(requirements, paymentRequired.resource.url);
+      }
     });
-  return client;
+}
+
+// Kept for callers that assemble payment data without using the official client hook.
+export function registerResourceUrl(requirements: PaymentRequirements, resourceUrl: string): void {
+  resourceUrls.set(requirements, resourceUrl);
 }

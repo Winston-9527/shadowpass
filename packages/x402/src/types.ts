@@ -1,7 +1,13 @@
 import { keccak256, toHex } from "viem";
 import { z } from "zod";
-import type { Address, Hex } from "@shadowpass/sdk";
-import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
+import type { Address, Deployment, Hex } from "@shadowpass/sdk";
+import type {
+  Network,
+  PaymentPayload,
+  PaymentRequirements,
+  SettleResponse,
+  VerifyResponse,
+} from "@x402/core/types";
 
 export const SHADOWPASS_SCHEME = "shadowpass" as const;
 export const SHADOWPASS_NETWORK = "eip155:84532" as const;
@@ -11,8 +17,8 @@ export const PAY_METHOD = keccak256(toHex("shadowpass.PAY")).slice(0, 10) as Hex
 export const addressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
 export const uintSchema = z.string().regex(/^(0|[1-9][0-9]*)$/);
 export const hexSchema = z.string().regex(/^0x(?:[0-9a-fA-F]{2})*$/);
-const bytes4Schema = z.string().regex(/^0x[0-9a-fA-F]{8}$/);
-export const calldataProofSchema = z.object({
+export const bytes4Schema = z.string().regex(/^0x[0-9a-fA-F]{8}$/);
+export const proofSchema = z.object({
   a: z.tuple([uintSchema, uintSchema]),
   b: z.tuple([
     z.tuple([uintSchema, uintSchema]),
@@ -21,9 +27,9 @@ export const calldataProofSchema = z.object({
   c: z.tuple([uintSchema, uintSchema]),
 }).strict();
 
-export const shadowpassPayloadSchema = z.object({
+export const ShadowpassPayloadSchema = z.object({
   D: z.number().int().min(1).max(3),
-  proof: calldataProofSchema,
+  proof: proofSchema,
   roots: z.object({
     issued: uintSchema,
     revoked: uintSchema,
@@ -37,7 +43,7 @@ export const shadowpassPayloadSchema = z.object({
     nonce: uintSchema,
     params: hexSchema,
   }).strict(),
-  ct: z.array(uintSchema).min(7),
+  ct: z.array(uintSchema).min(7).max(9),
   budget: z.object({
     noteRoot: uintSchema,
     budgetNf: uintSchema,
@@ -45,99 +51,77 @@ export const shadowpassPayloadSchema = z.object({
     qSpent: uintSchema,
   }).strict(),
   memoChange: hexSchema,
-  timings: z.object({
-    proofMs: z.number().nonnegative(),
-  }).strict().optional(),
+  timings: z.object({ proofMs: z.number().nonnegative() }).strict().optional(),
 }).strict();
 
-export type ShadowpassPayload = z.infer<typeof shadowpassPayloadSchema>;
+export type ShadowpassPayload = z.infer<typeof ShadowpassPayloadSchema>;
 export type CalldataProof = ShadowpassPayload["proof"];
+export type Roots = ShadowpassPayload["roots"];
 
-export interface GateExecuteRequest {
-  proof: CalldataProof;
-  roots: ShadowpassPayload["roots"];
-  nowTs: string;
-  action: ShadowpassPayload["action"];
-  ct: string[];
-  budget: ShadowpassPayload["budget"];
-  memoChange: Hex;
+export interface ShadowpassPaymentBuilder {
+  buildPayment(requirements: PaymentRequirements, resourceUrl: string): Promise<ShadowpassPayload>;
+}
+
+export interface PaymentChainView {
+  deployment: Deployment;
+  blockTimestamp(): Promise<number>;
+  isStateRegistered(roots: Roots): Promise<boolean>;
+}
+
+export interface TransactionResult {
+  transaction: Hex;
+  blockNumber: bigint;
+  logs: readonly unknown[];
 }
 
 export interface GateClient {
-  simulateExecute(request: GateExecuteRequest): Promise<void>;
-  sendExecute(request: GateExecuteRequest): Promise<Hex>;
-  waitForConfirmation(transaction: Hex): Promise<void>;
+  simulateExecute(payload: ShadowpassPayload): Promise<void>;
+  sendExecute(payload: ShadowpassPayload): Promise<TransactionResult>;
+  registerState(roots: Roots): Promise<TransactionResult>;
 }
 
-export interface RegisterRelayRequest {
-  proof: CalldataProof;
-  groupRoot: string;
-  nf: string;
-  leaf0: string;
-  siblingNodes: string[];
+export interface ShadowpassFacilitatorCoreOptions {
+  gateClient: GateClient;
+  chainView: PaymentChainView;
+  signers: Address[];
+  clockSkewSeconds?: number;
+  merchantRateLimit?: { limit: number; windowMs: number };
 }
 
-export interface DepositRelayRequest {
-  proof: CalldataProof;
-  cm: string;
-  q: string;
-  memo: Hex;
-}
+export type RelayAction =
+  | "join"
+  | "register"
+  | "faucetDeposit"
+  | "issue"
+  | "transferBudget"
+  | "revoke"
+  | "registerState";
 
-export interface TransferBudgetRelayRequest {
-  proof: CalldataProof;
-  noteRoot: string;
-  revokedRoot: string;
-  nullifier: string;
-  cm1: string;
-  cm2: string;
-  memo1: Hex;
-  memo2: Hex;
+export const RELAY_ACTIONS = [
+  "join",
+  "register",
+  "faucetDeposit",
+  "issue",
+  "transferBudget",
+  "revoke",
+  "registerState",
+] as const satisfies readonly RelayAction[];
+
+export interface RelayResult {
+  transaction: Hex;
+  blockNumber: string;
+  logs: Array<Record<string, string>>;
 }
 
 export interface WalletRelayClient {
-  join(commitment: string): Promise<Hex>;
-  issue(certHash: string): Promise<Hex>;
-  register(request: RegisterRelayRequest): Promise<Hex>;
-  deposit(request: DepositRelayRequest): Promise<Hex>;
-  transferBudget(request: TransferBudgetRelayRequest): Promise<Hex>;
+  relay(action: RelayAction, args: Record<string, unknown>): Promise<RelayResult>;
 }
 
-export interface ShadowpassPaymentBuilderInput {
-  requirements: PaymentRequirements;
-  resourceUrl: string;
-  memoChange: Hex;
-}
-
-export interface ShadowpassPaymentBuilder {
-  build(input: ShadowpassPaymentBuilderInput): Promise<ShadowpassPayload>;
-}
-
-export class ShadowpassPayloadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ShadowpassPayloadError";
-  }
-}
+export type ShadowpassVerifyResult = VerifyResponse;
+export type ShadowpassSettleResult = SettleResponse;
 
 export function parseShadowpassPayload(payment: PaymentPayload): ShadowpassPayload {
-  const result = shadowpassPayloadSchema.safeParse(payment.payload);
-  if (!result.success) {
-    throw new ShadowpassPayloadError(result.error.issues.map((issue) => issue.message).join("; "));
-  }
-  return result.data;
-}
-
-export function gateRequest(payload: ShadowpassPayload): GateExecuteRequest {
-  return {
-    proof: payload.proof,
-    roots: payload.roots,
-    nowTs: payload.nowTs,
-    action: payload.action,
-    ct: payload.ct,
-    budget: payload.budget,
-    memoChange: payload.memoChange as Hex,
-  };
+  return ShadowpassPayloadSchema.parse(payment.payload);
 }
 
 export function requirementAddress(
@@ -145,8 +129,12 @@ export function requirementAddress(
   key: string,
 ): Address {
   const value = requirements.extra?.[key];
-  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(value)) {
-    throw new ShadowpassPayloadError(`payment requirement extra.${key} is not an address`);
+  if (typeof value !== "string" || !addressSchema.safeParse(value).success) {
+    throw new Error(`missing_${key}`);
   }
   return value as Address;
+}
+
+export function isNetwork(value: unknown): value is Network {
+  return typeof value === "string" && /^[^:]+:[^:]+$/.test(value);
 }

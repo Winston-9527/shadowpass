@@ -1,30 +1,26 @@
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import { paymentMiddleware } from "@x402/express";
-import { ShadowpassServer, SHADOWPASS_NETWORK } from "@shadowpass/x402";
-
-type Address = `0x${string}`;
-type Network = `${string}:${string}`;
+import type { Address, Deployment } from "@shadowpass/sdk";
+import { ShadowpassServerScheme } from "@shadowpass/x402";
 
 export interface MerchantDemoOptions {
   facilitatorUrl: string;
+  deployment: Deployment;
   asset: Address;
-  gate: Address;
-  payout: Address;
-  network?: Network;
+  merchantPayTo: Address;
 }
 
 function unavailableHandler(handler: RequestHandler): RequestHandler {
   return (request, response, next) => {
-    Promise.resolve(handler(request, response, next)).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      response.status(503).json({ error: "facilitator_unavailable", message });
+    Promise.resolve(handler(request, response, next)).catch(() => {
+      response.status(503).json({ error: "facilitator_unavailable" });
     });
   };
 }
 
 export function createMerchantApp(options: MerchantDemoOptions) {
-  const network = options.network ?? SHADOWPASS_NETWORK;
+  const network = `eip155:${options.deployment.chainId}` as const;
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json());
@@ -32,11 +28,11 @@ export function createMerchantApp(options: MerchantDemoOptions) {
   let handled = 0;
   const resourceServer = new x402ResourceServer(
     new HTTPFacilitatorClient({ url: options.facilitatorUrl }),
-  ).register(network, new ShadowpassServer({
+  ).register(network, new ShadowpassServerScheme({
+    deployment: options.deployment,
     asset: options.asset,
-    gate: options.gate,
-    payout: options.payout,
-    network,
+    payout: options.deployment.payout,
+    decimals: 6,
   }));
 
   const middleware = paymentMiddleware({
@@ -45,9 +41,9 @@ export function createMerchantApp(options: MerchantDemoOptions) {
         scheme: "shadowpass",
         price: "$2.00",
         network,
-        payTo: options.payout,
-        maxTimeoutSeconds: 60,
-        extra: { gate: options.gate, payout: options.payout },
+        payTo: options.merchantPayTo,
+        maxTimeoutSeconds: 120,
+        extra: { gate: options.deployment.gate, payout: options.deployment.payout },
       }],
       description: "Market report",
       mimeType: "application/json",
@@ -57,9 +53,9 @@ export function createMerchantApp(options: MerchantDemoOptions) {
         scheme: "shadowpass",
         price: "$0.50",
         network,
-        payTo: options.payout,
-        maxTimeoutSeconds: 60,
-        extra: { gate: options.gate, payout: options.payout },
+        payTo: options.merchantPayTo,
+        maxTimeoutSeconds: 120,
+        extra: { gate: options.deployment.gate, payout: options.deployment.payout },
       }],
       description: "News feed",
       mimeType: "application/json",
@@ -71,14 +67,12 @@ export function createMerchantApp(options: MerchantDemoOptions) {
     initError = error;
   });
   const protectedMiddleware: RequestHandler = async (request, response, next) => {
-    try {
-      await ready;
-      if (initError) throw initError;
-      await middleware(request, response, next);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      response.status(503).json({ error: "facilitator_unavailable", message });
+    await ready;
+    if (initError) {
+      response.status(503).json({ error: "facilitator_unavailable" });
+      return;
     }
+    await middleware(request, response, next);
   };
 
   app.get("/health", (_request, response) => response.json({ ok: true, handled }));
@@ -91,13 +85,8 @@ export function createMerchantApp(options: MerchantDemoOptions) {
     handled += 1;
     response.json({ headlines: ["Battery costs fall again"], bytes: 321 });
   });
-  app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/facilitator|supported kinds/i.test(message)) {
-      response.status(503).json({ error: "facilitator_unavailable", message });
-      return;
-    }
-    response.status(500).json({ error: "merchant_error", message });
+  app.use((_error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+    response.status(502).json({ error: "merchant_upstream_error" });
   });
   return { app, resourceServer, ready };
 }

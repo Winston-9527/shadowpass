@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url";
+import { loadDeployment, type Address } from "@shadowpass/sdk";
 import { createMerchantApp } from "./app.js";
 
 function required(name: string): string {
@@ -8,11 +9,13 @@ function required(name: string): string {
 }
 
 export async function main(): Promise<void> {
+  const network = process.env.SHADOWPASS_NETWORK ?? "anvil";
+  const deployment = await loadDeployment(network);
   const { app } = createMerchantApp({
     facilitatorUrl: required("FACILITATOR_URL"),
-    asset: required("SHADOWPASS_TOKEN") as `0x${string}`,
-    gate: required("SHADOWPASS_GATE") as `0x${string}`,
-    payout: required("SHADOWPASS_PAYOUT") as `0x${string}`,
+    deployment,
+    asset: (process.env.SHADOWPASS_TOKEN ?? deployment.token) as Address,
+    merchantPayTo: required("MERCHANT_PAY_TO") as Address,
   });
   app.listen(Number(process.env.PORT ?? 4021), () => {
     console.log("shadowpass merchant demo listening");

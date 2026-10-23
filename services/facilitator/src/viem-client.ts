@@ -5,204 +5,253 @@ import {
   parseAbi,
   type Address,
   type Hex,
+  type PublicClient,
+  type WalletClient,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import type {
-  DepositRelayRequest,
-  GateClient,
-  GateExecuteRequest,
-  RegisterRelayRequest,
-  TransferBudgetRelayRequest,
-  WalletRelayClient,
+import type { Deployment } from "@shadowpass/sdk";
+import {
+  createSerializedSender,
+  revertName,
+  type RelayAction,
+  type RelayResult,
+  type WalletRelayClient,
 } from "@shadowpass/x402";
 
-const proofComponents = [
-  { name: "a", type: "uint256[2]" },
-  { name: "b", type: "uint256[2][2]" },
-  { name: "c", type: "uint256[2]" },
-] as const;
-
-const gateAbi = [
-  {
-    type: "function",
-    name: "execute",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "proof", type: "tuple", components: proofComponents },
-      {
-        name: "roots",
-        type: "tuple",
-        components: [
-          { name: "issued", type: "uint256" },
-          { name: "revoked", type: "uint256" },
-          { name: "root", type: "uint256" },
-        ],
-      },
-      { name: "nowTs", type: "uint64" },
-      {
-        name: "action",
-        type: "tuple",
-        components: [
-          { name: "target", type: "address" },
-          { name: "method", type: "bytes4" },
-          { name: "amount", type: "uint256" },
-          { name: "nonce", type: "uint256" },
-          { name: "params", type: "bytes" },
-        ],
-      },
-      { name: "ct", type: "uint256[]" },
-      {
-        name: "budget",
-        type: "tuple",
-        components: [
-          { name: "noteRoot", type: "uint256" },
-          { name: "budgetNf", type: "uint256" },
-          { name: "cmChange", type: "uint256" },
-          { name: "qSpent", type: "uint256" },
-        ],
-      },
-      { name: "memoChange", type: "bytes" },
-    ],
-    outputs: [],
-  },
-  {
-    type: "function",
-    name: "issue",
-    stateMutability: "nonpayable",
-    inputs: [{ name: "certHash", type: "uint256" }],
-    outputs: [],
-  },
-  {
-    type: "function",
-    name: "deposit",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "proof", type: "tuple", components: proofComponents },
-      { name: "cm", type: "uint256" },
-      { name: "q", type: "uint256" },
-      { name: "memo", type: "bytes" },
-    ],
-    outputs: [],
-  },
-  {
-    type: "function",
-    name: "transferBudget",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "proof", type: "tuple", components: proofComponents },
-      { name: "noteRoot", type: "uint256" },
-      { name: "revokedRoot", type: "uint256" },
-      { name: "nullifier", type: "uint256" },
-      { name: "cm1", type: "uint256" },
-      { name: "cm2", type: "uint256" },
-      { name: "memo1", type: "bytes" },
-      { name: "memo2", type: "bytes" },
-    ],
-    outputs: [],
-  },
-] as const;
-
+const groupAbi = parseAbi(["function join(uint256 commitment)"] as const);
 const registryAbi = parseAbi([
   "function register((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 groupRoot,uint256 nf,uint256 leaf0,uint256[] siblingNodes)",
 ] as const);
+const tokenAbi = parseAbi([
+  "function faucetDeposit((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 cm,uint256 q,bytes memo)",
+] as const);
+const gateAbi = parseAbi([
+  "function issue(uint256 certHash)",
+  "function transferBudget((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 noteRoot,uint256 revokedRoot,uint256 nullifier,uint256 cm1,uint256 cm2,bytes memo1,bytes memo2)",
+  "function registerState(uint256 issued,uint256 revoked,uint256 root) returns (uint256)",
+] as const);
+const revocationsAbi = parseAbi([
+  "function revoke((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 newRoot,uint256 entry)",
+] as const);
 
-const groupAbi = parseAbi(["function join(uint256 commitment)"] as const);
-
-export interface ViemClientOptions {
-  rpcUrl: string;
-  privateKey: Hex;
-  gate: Address;
-  registry?: Address;
-  group?: Address;
-  confirmations?: number;
+export interface ViemAccounts {
+  publicClient: PublicClient;
+  walletClient: WalletClient;
+  address: Address;
 }
 
-function clients(options: ViemClientOptions) {
-  const account = privateKeyToAccount(options.privateKey);
-  const transport = http(options.rpcUrl);
+export function createViemAccounts(rpcUrl: string, privateKey: Hex): ViemAccounts {
+  const account = privateKeyToAccount(privateKey);
+  const transport = http(rpcUrl);
   return {
-    account,
     publicClient: createPublicClient({ transport }),
     walletClient: createWalletClient({ account, transport }),
+    address: account.address,
   };
 }
 
-export function createViemGateClient(options: ViemClientOptions): GateClient {
-  const { account, publicClient, walletClient } = clients(options);
-  return {
-    async simulateExecute(request: GateExecuteRequest) {
-      await publicClient.simulateContract({
-        account,
-        address: options.gate,
-        abi: gateAbi,
-        functionName: "execute",
-        args: [request.proof, request.roots, BigInt(request.nowTs), request.action, request.ct.map(BigInt), request.budget, request.memoChange] as any,
-      });
-    },
-    async sendExecute(request: GateExecuteRequest) {
-      return walletClient.writeContract({
-        account,
-        chain: null,
-        address: options.gate,
-        abi: gateAbi,
-        functionName: "execute",
-        args: [request.proof, request.roots, BigInt(request.nowTs), request.action, request.ct.map(BigInt), request.budget, request.memoChange] as any,
-      });
-    },
-    async waitForConfirmation(transaction: Hex) {
-      await publicClient.waitForTransactionReceipt({ hash: transaction, confirmations: options.confirmations ?? 1 });
-    },
-  };
+export interface ViemRelayOptions {
+  publicClient: PublicClient;
+  walletClient: WalletClient;
+  deployment: Deployment;
 }
 
-export function createViemWalletRelayClient(options: ViemClientOptions): WalletRelayClient {
-  if (!options.registry || !options.group) {
-    throw new Error("registry and group addresses are required for wallet relay");
+export class RelayRevertError extends Error {
+  constructor(readonly revertName: string) {
+    super(`simulation_failed:${revertName}`);
+    this.name = "RelayRevertError";
   }
-  const { account, publicClient, walletClient } = clients(options);
-  const wait = async (hash: Hex) => {
-    await publicClient.waitForTransactionReceipt({ hash, confirmations: options.confirmations ?? 1 });
-    return hash;
-  };
+}
+
+export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRelayClient {
+  const account = options.walletClient.account?.address;
+  if (!account) throw new Error("wallet_account_missing");
+  const sender = createSerializedSender(options.publicClient, options.walletClient);
+
   const send = async (
-    address: Address,
-    abi: typeof gateAbi | typeof registryAbi | typeof groupAbi,
-    functionName: string,
-    args: readonly unknown[],
-  ): Promise<Hex> => {
-    const hash = await walletClient.writeContract({
-      account,
-      chain: null,
-      address,
-      abi: abi as any,
-      functionName: functionName as never,
-      args: args as never,
-    });
-    return wait(hash);
+    simulation: Promise<unknown>,
+    write: () => Promise<Hex>,
+  ): Promise<RelayResult> => {
+    try {
+      await simulation;
+    } catch (error) {
+      throw new RelayRevertError(revertName(error) ?? "unknown");
+    }
+    const receipt = await sender.write(write);
+    return {
+      transaction: receipt.transaction,
+      blockNumber: receipt.blockNumber.toString(),
+      logs: receipt.logs.map((log: any) => ({
+        address: String(log.address),
+        topics: Array.isArray(log.topics) ? log.topics.join(",") : "",
+        data: String(log.data),
+        logIndex: String(log.logIndex),
+        transactionHash: String(log.transactionHash),
+        blockNumber: String(log.blockNumber),
+      })),
+    };
   };
+
   return {
-    join: (commitment) => send(options.group!, groupAbi, "join", [BigInt(commitment)]),
-    issue: (certHash) => send(options.gate, gateAbi, "issue", [BigInt(certHash)]),
-    register: (request: RegisterRelayRequest) =>
-      send(options.registry!, registryAbi, "register", [
-        request.proof,
-        BigInt(request.groupRoot),
-        BigInt(request.nf),
-        BigInt(request.leaf0),
-        request.siblingNodes.map(BigInt),
-      ]),
-    deposit: (request: DepositRelayRequest) =>
-      send(options.gate, gateAbi, "deposit", [request.proof, BigInt(request.cm), BigInt(request.q), request.memo]),
-    transferBudget: (request: TransferBudgetRelayRequest) =>
-      send(options.gate, gateAbi, "transferBudget", [
-        request.proof,
-        BigInt(request.noteRoot),
-        BigInt(request.revokedRoot),
-        BigInt(request.nullifier),
-        BigInt(request.cm1),
-        BigInt(request.cm2),
-        request.memo1,
-        request.memo2,
-      ]),
+    async relay(action: RelayAction, args: Record<string, unknown>): Promise<RelayResult> {
+      switch (action) {
+        case "join":
+          return send(
+            options.publicClient.simulateContract({
+              account,
+              address: options.deployment.group,
+              abi: groupAbi,
+              functionName: "join",
+              args: [BigInt(String(args.commitment))],
+            }),
+            () => options.walletClient.writeContract({
+              account,
+              chain: null,
+              address: options.deployment.group,
+              abi: groupAbi,
+              functionName: "join",
+              args: [BigInt(String(args.commitment))],
+            }),
+          );
+        case "register":
+          return send(
+            options.publicClient.simulateContract({
+              account,
+              address: options.deployment.registry,
+              abi: registryAbi,
+              functionName: "register",
+              args: [
+                args.proof as any,
+                BigInt(String(args.groupRoot)),
+                BigInt(String(args.nf)),
+                BigInt(String(args.leaf0)),
+                (args.siblingNodes as unknown[]).map((value) => BigInt(String(value))),
+              ],
+            }),
+            () => options.walletClient.writeContract({
+              account,
+              chain: null,
+              address: options.deployment.registry,
+              abi: registryAbi,
+              functionName: "register",
+              args: [
+                args.proof as any,
+                BigInt(String(args.groupRoot)),
+                BigInt(String(args.nf)),
+                BigInt(String(args.leaf0)),
+                (args.siblingNodes as unknown[]).map((value) => BigInt(String(value))),
+              ],
+            }),
+          );
+        case "faucetDeposit":
+          return send(
+            options.publicClient.simulateContract({
+              account,
+              address: options.deployment.token,
+              abi: tokenAbi,
+              functionName: "faucetDeposit",
+              args: [args.proof as any, BigInt(String(args.cm)), BigInt(String(args.q)), String(args.memo) as Hex],
+            }),
+            () => options.walletClient.writeContract({
+              account,
+              chain: null,
+              address: options.deployment.token,
+              abi: tokenAbi,
+              functionName: "faucetDeposit",
+              args: [args.proof as any, BigInt(String(args.cm)), BigInt(String(args.q)), String(args.memo) as Hex],
+            }),
+          );
+        case "issue":
+          return send(
+            options.publicClient.simulateContract({
+              account,
+              address: options.deployment.gate,
+              abi: gateAbi,
+              functionName: "issue",
+              args: [BigInt(String(args.certHash))],
+            }),
+            () => options.walletClient.writeContract({
+              account,
+              chain: null,
+              address: options.deployment.gate,
+              abi: gateAbi,
+              functionName: "issue",
+              args: [BigInt(String(args.certHash))],
+            }),
+          );
+        case "transferBudget":
+          return send(
+            options.publicClient.simulateContract({
+              account,
+              address: options.deployment.gate,
+              abi: gateAbi,
+              functionName: "transferBudget",
+              args: [
+                args.proof as any,
+                BigInt(String(args.noteRoot)),
+                BigInt(String(args.revokedRoot)),
+                BigInt(String(args.nullifier)),
+                BigInt(String(args.cm1)),
+                BigInt(String(args.cm2)),
+                String(args.memo1) as Hex,
+                String(args.memo2) as Hex,
+              ],
+            }),
+            () => options.walletClient.writeContract({
+              account,
+              chain: null,
+              address: options.deployment.gate,
+              abi: gateAbi,
+              functionName: "transferBudget",
+              args: [
+                args.proof as any,
+                BigInt(String(args.noteRoot)),
+                BigInt(String(args.revokedRoot)),
+                BigInt(String(args.nullifier)),
+                BigInt(String(args.cm1)),
+                BigInt(String(args.cm2)),
+                String(args.memo1) as Hex,
+                String(args.memo2) as Hex,
+              ],
+            }),
+          );
+        case "revoke":
+          return send(
+            options.publicClient.simulateContract({
+              account,
+              address: options.deployment.revocations,
+              abi: revocationsAbi,
+              functionName: "revoke",
+              args: [args.proof as any, BigInt(String(args.newRoot)), BigInt(String(args.entry))],
+            }),
+            () => options.walletClient.writeContract({
+              account,
+              chain: null,
+              address: options.deployment.revocations,
+              abi: revocationsAbi,
+              functionName: "revoke",
+              args: [args.proof as any, BigInt(String(args.newRoot)), BigInt(String(args.entry))],
+            }),
+          );
+        case "registerState":
+          return send(
+            options.publicClient.simulateContract({
+              account,
+              address: options.deployment.gate,
+              abi: gateAbi,
+              functionName: "registerState",
+              args: [BigInt(String(args.issued)), BigInt(String(args.revoked)), BigInt(String(args.root))],
+            }),
+            () => options.walletClient.writeContract({
+              account,
+              chain: null,
+              address: options.deployment.gate,
+              abi: gateAbi,
+              functionName: "registerState",
+              args: [BigInt(String(args.issued)), BigInt(String(args.revoked)), BigInt(String(args.root))],
+            }),
+          );
+      }
+    },
   };
 }
