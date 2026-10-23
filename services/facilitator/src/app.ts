@@ -30,6 +30,27 @@ const relaySchemas = {
   }).strict(),
   revoke: z.object({ proof: proofSchema, newRoot: uintSchema, entry: uintSchema }).strict(),
   registerState: z.object({ issued: uintSchema, revoked: uintSchema, root: uintSchema }).strict(),
+  execute: z.object({
+    proof: proofSchema,
+    roots: z.object({ issued: uintSchema, revoked: uintSchema, root: uintSchema }).strict(),
+    nowTs: uintSchema,
+    action: z.object({
+      target: hexSchema,
+      method: hexSchema,
+      amount: uintSchema,
+      nonce: uintSchema,
+      params: hexSchema,
+    }).strict(),
+    ct: z.array(uintSchema),
+    budget: z.object({
+      noteRoot: uintSchema,
+      budgetNf: uintSchema,
+      cmChange: uintSchema,
+      qSpent: uintSchema,
+    }).strict(),
+    memoChange: hexSchema,
+  }).strict(),
+  treasuryWithdraw: z.object({ positionId: uintSchema }).strict(),
 } satisfies Record<RelayAction, z.ZodTypeAny>;
 
 const verifyBodySchema = z.object({

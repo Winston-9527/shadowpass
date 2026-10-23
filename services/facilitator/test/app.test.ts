@@ -64,6 +64,39 @@ describe("facilitator HTTP service", () => {
     });
     expect(transfer.status).toBe(200);
     expect(calls[1]).toEqual(["transferBudget", expect.objectContaining({ memo1: "0x01", memo2: "0x02" })]);
+    const execute = await fetch(`${base}/relay/execute`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        args: {
+          proof: { a: ["1", "2"], b: [["3", "4"], ["5", "6"]], c: ["7", "8"] },
+          roots: { issued: "1", revoked: "2", root: "3" },
+          nowTs: "4",
+          action: {
+            target: "0x0000000000000000000000000000000000000001",
+            method: "0x12345678",
+            amount: "5",
+            nonce: "6",
+            params: "0x1234",
+          },
+          ct: ["7", "8"],
+          budget: { noteRoot: "9", budgetNf: "10", cmChange: "11", qSpent: "5" },
+          memoChange: "0xabcd",
+        },
+      }),
+    });
+    expect(execute.status).toBe(200);
+    expect(calls[2]).toEqual(["execute", expect.objectContaining({
+      roots: expect.objectContaining({ issued: "1" }),
+      action: expect.objectContaining({ method: "0x12345678" }),
+    })]);
+    const withdraw = await fetch(`${base}/relay/treasuryWithdraw`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ args: { positionId: "12" } }),
+    });
+    expect(withdraw.status).toBe(200);
+    expect(calls[3]).toEqual(["treasuryWithdraw", { positionId: "12" }]);
   });
 
   it("rate limits relay calls by trusted IP", async () => {

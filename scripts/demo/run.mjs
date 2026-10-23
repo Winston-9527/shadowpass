@@ -4,7 +4,8 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
-import { createPublicClient, http } from "viem";
+import { createPublicClient, http, parseAbi, parseEventLogs } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { loadDeployment } from "@shadowpass/sdk";
 import { createMerchantApp } from "@shadowpass/merchant-demo";
 import { startFacilitator } from "@shadowpass/facilitator";
@@ -21,6 +22,9 @@ const RPC_URL = process.env.ANVIL_RPC_URL ?? `http://127.0.0.1:${RPC_PORT}`;
 const DEPLOYER_PK = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const FACILITATOR_PK = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const MERCHANT_PAY_TO = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
+const ownerCiphertextAbi = parseAbi([
+  "event OwnerCiphertext(uint256 indexed budgetNf,uint256[] ct)",
+]);
 let anvil;
 let facilitatorServer;
 let merchantServer;
@@ -137,9 +141,10 @@ async function startServices(deployment) {
     merchantRateLimit: { limit: 500, windowMs: 60_000 },
   });
   facilitatorServer = facilitator.server;
-  const facilitatorAddress = facilitatorServer.address();
-  if (!facilitatorAddress || typeof facilitatorAddress === "string") throw new Error("facilitator bind failed");
-  const facilitatorUrl = `http://127.0.0.1:${facilitatorAddress.port}`;
+  const facilitatorBinding = facilitatorServer.address();
+  if (!facilitatorBinding || typeof facilitatorBinding === "string") throw new Error("facilitator bind failed");
+  const facilitatorUrl = `http://127.0.0.1:${facilitatorBinding.port}`;
+  const facilitatorAddress = privateKeyToAccount(FACILITATOR_PK).address;
 
   const merchant = createMerchantApp({
     facilitatorUrl,
@@ -151,7 +156,7 @@ async function startServices(deployment) {
   const merchantPort = e2e ? 0 : Number(process.env.SHADOWPASS_MERCHANT_PORT ?? 4021);
   const listener = await listen(merchant.app, merchantPort);
   merchantServer = listener.server;
-  return { facilitatorUrl, merchantUrl: listener.url };
+  return { facilitatorUrl, merchantUrl: listener.url, facilitatorAddress };
 }
 
 async function startDemo(engine) {
@@ -162,15 +167,22 @@ async function startDemo(engine) {
   return listener.url;
 }
 
-async function runE2e(url) {
+async function runE2e(url, facilitatorAddress) {
+  const client = createPublicClient({ transport: http(RPC_URL) });
+  const deployerAddress = privateKeyToAccount(DEPLOYER_PK).address;
   const status = await fetch(`${url}/api/status`).then((response) => response.json());
   if (status.simulated !== true || status.anonymity.simulatedDepositors !== 20) {
     throw new Error("simulated anonymity set was not prepared");
   }
   if (status.anonymity.noteSetSize < 25) throw new Error("note anonymity set is too small");
+  if (status.anonymity.identitySetSize !== 1) throw new Error("identity anonymity limitation is not exposed");
 
-  const purchase = await post(url, "/api/actions/purchase");
-  if (!purchase.record.tx) throw new Error("purchase did not settle on-chain");
+  const purchases = [];
+  for (let index = 0; index < 3; index += 1) {
+    const purchase = await post(url, "/api/actions/purchase");
+    if (!purchase.record.tx) throw new Error(`purchase ${index + 1} did not settle on-chain`);
+    purchases.push(purchase);
+  }
   const treasury = await post(url, "/api/actions/treasury");
   if (!treasury.record.tx) throw new Error("treasury supply did not settle on-chain");
   const withdraw = await post(url, "/api/actions/treasury-withdraw");
@@ -180,16 +192,67 @@ async function runE2e(url) {
   if (!finalStatus.position?.withdrawn) throw new Error("treasury position is not withdrawn");
   const capability = await post(url, "/api/capability-check", { branch: "buyer", operation: "treasury" });
   if (capability.allowed !== false) throw new Error("capability isolation was not enforced");
+  if (!String(capability.explanation).includes("CapSubset")) {
+    throw new Error(`capability explanation did not come from the circuit: ${capability.explanation}`);
+  }
+
+  const purchaseRecords = finalStatus.actions.filter((entry) => entry.operation === "purchase");
+  if (purchaseRecords.length !== 3) throw new Error("expected three purchase records");
+  const ownerCiphertexts = purchaseRecords.map((entry) => entry.ownerCt.join(","));
+  if (new Set(ownerCiphertexts).size !== 3) throw new Error("owner ciphertexts are not unique");
+  for (const [index, record] of purchaseRecords.entries()) {
+    const receipt = await client.getTransactionReceipt({ hash: record.tx });
+    const events = parseEventLogs({
+      abi: ownerCiphertextAbi,
+      logs: receipt.logs,
+      eventName: "OwnerCiphertext",
+    });
+    if (events.length !== 1) throw new Error(`purchase ${index + 1} owner ciphertext event missing`);
+    if (events[0].args.ct.map(String).join(",") !== record.ownerCt.join(",")) {
+      throw new Error(`purchase ${index + 1} owner ciphertext differs from chain`);
+    }
+    const transaction = await client.getTransaction({ hash: record.tx });
+    if (transaction.from.toLowerCase() !== facilitatorAddress.toLowerCase()) {
+      throw new Error(`purchase ${index + 1} was not relayed by facilitator`);
+    }
+  }
+
+  const relayedLabels = [
+    "加入身份组",
+    "注册 Alice 根凭证",
+    "签发采购凭证",
+    "签发理财凭证",
+    "Alice 入金 75 spUSD",
+    "划拨采购预算 40 spUSD",
+    "划拨理财预算 25 spUSD",
+    "理财 Agent 存入白名单金库",
+    "到期赎回并生成承诺票据",
+  ];
+  for (const label of relayedLabels) {
+    const record = finalStatus.transactions.find((entry) => entry.label === label);
+    if (!record) throw new Error(`missing relayed transaction: ${label}`);
+    const transaction = await client.getTransaction({ hash: record.hash });
+    if (transaction.from.toLowerCase() !== facilitatorAddress.toLowerCase()) {
+      throw new Error(`${label} was sent by ${transaction.from}, expected facilitator`);
+    }
+  }
 
   console.log(JSON.stringify({
     result: "ok",
     simulatedDepositors: status.anonymity.simulatedDepositors,
     initialNoteSetSize: status.anonymity.noteSetSize,
-    purchase: { tx: purchase.record.tx, proofMs: purchase.record.proofMs, ownerView: purchase.record.ownerView },
+    purchases: purchases.map((entry) => ({
+      tx: entry.record.tx,
+      proofMs: entry.record.proofMs,
+      ownerView: entry.record.ownerView,
+    })),
+    ownerCiphertextsUnique: new Set(ownerCiphertexts).size,
     treasury: { tx: treasury.record.tx, proofMs: treasury.record.proofMs, ownerView: treasury.record.ownerView },
     withdraw: { tx: withdraw.record.tx, amount: withdraw.record.amount },
     finalNoteSetSize: finalStatus.anonymity.noteSetSize,
-    capabilityCheck: capability.reason,
+    capabilityCheck: { reason: capability.reason, explanation: capability.explanation },
+    relayOperator: facilitatorAddress,
+    deployerOperator: deployerAddress,
   }, null, 2));
 }
 
@@ -250,6 +313,7 @@ try {
     manifestHashes: artifacts.manifestHashes,
     merchantUrl: services.merchantUrl,
     facilitatorUrl: services.facilitatorUrl,
+    facilitatorAddress: services.facilitatorAddress,
     merchantPayTo: MERCHANT_PAY_TO,
     deployerPrivateKey: DEPLOYER_PK,
   });
@@ -259,7 +323,7 @@ try {
   log(`演示面板 ${url}`);
   log(`Gate ${deployment.gate}`);
   if (e2e) {
-    await runE2e(url);
+    await runE2e(url, services.facilitatorAddress);
     await shutdown(0);
   } else {
     console.log("\n按 Ctrl-C 结束本地链与演示服务。\n");

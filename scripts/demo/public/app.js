@@ -74,7 +74,7 @@ function render() {
   if (!data) return;
   setText("#network-name", `${data.network.name} 本地链`);
   setText("#chain-id", String(data.network.chainId));
-  setText("#simulated-count", `${data.anonymity.simulatedDepositors} 个模拟用户`);
+  setText("#simulated-count", `${data.anonymity.simulatedDepositors} 个票据层模拟用户`);
   setText("#simulation-copy", data.simulatedLabel);
   setText("#note-set", `${data.anonymity.noteSetSize} 张票据`);
   setText("#tx-count", `${data.transactions.length} 笔`);

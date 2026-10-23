@@ -33,7 +33,7 @@ The package test suite includes a process-level startup smoke test that verifies
 ## Endpoints
 
 See `docs/INTERFACES.md` §14. `POST /relay/:action` supports `join`, `register`, `faucetDeposit`, `issue`,
-`transferBudget`, `revoke` and `registerState`. Every call is simulated again inside the serialized nonce
+`transferBudget`, `revoke`, `registerState`, `execute` and `treasuryWithdraw`. Every call is simulated again inside the serialized nonce
 queue immediately before local signing, rate-limited by IP, and returns only sanitized error codes.
 `faucetDeposit` uses the configured `RELAY_FAUCET_PER_DAY` quota and only commits it after execution succeeds.
 Receipt polling uses a 300 ms interval. If broadcast succeeds but receipt polling fails, the nullifier remains

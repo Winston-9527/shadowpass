@@ -24,21 +24,21 @@
     <main>
       <section class="overview" aria-labelledby="overview-title">
         <div class="overview-copy">
-          <div class="eyebrow">采购 + 理财 · 对照演示</div>
+          <div class="eyebrow">协议层演示 · 采购 + 理财 · 对照</div>
           <h1 id="overview-title">一张卡，两条互不越权的 Agent 分支</h1>
-          <p>真实证明、真实链上交易、真实 x402 结算；匿名集由本地预置用户构成。</p>
+          <p>真实证明、链上交易和 x402 结算；20 个模拟用户只扩展票据层匿名集，身份层匿名集仍为 1。</p>
         </div>
         <div class="simulation-note" role="note">
           <span class="simulation-mark">模拟数据</span>
           <div>
-            <strong id="simulated-count">20 个模拟用户</strong>
+            <strong id="simulated-count">20 个票据层模拟用户</strong>
             <p id="simulation-copy">正在加载本地链状态…</p>
           </div>
         </div>
       </section>
 
       <section class="metrics" aria-label="演示指标">
-        <div><span>票据匿名集</span><strong id="note-set">--</strong></div>
+        <div><span>票据层匿名集</span><strong id="note-set">--</strong></div>
         <div><span>链上交易</span><strong id="tx-count">--</strong></div>
         <div><span>采购剩余</span><strong id="buyer-budget">--</strong></div>
         <div><span>理财剩余</span><strong id="treasury-budget">--</strong></div>
@@ -140,8 +140,8 @@
         <div class="runtime-grid">
           <div><span>Gate</span><code id="gate-address">--</code></div>
           <div><span>Merchant</span><code id="merchant-url">--</code></div>
-          <div><span>匿名集入金</span><strong id="simulated-deposits">--</strong></div>
-          <div><span>身份组成员</span><strong id="registered-identities">--</strong></div>
+          <div><span>票据层模拟入金</span><strong id="simulated-deposits">--</strong></div>
+          <div><span>身份层匿名集</span><strong id="registered-identities">--</strong></div>
         </div>
       </section>
     </main>

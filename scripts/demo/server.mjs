@@ -16,14 +16,16 @@ export function createDemoApp({ engine, publicDir }) {
     response.json(engine.comparison(operation));
   });
 
-  app.post("/api/capability-check", (request, response) => {
+  app.post("/api/capability-check", (request, response, next) => {
     const branch = request.body?.branch;
     const operation = request.body?.operation;
     if (!new Set(["buyer", "treasury"]).has(branch) || !new Set(["purchase", "treasury"]).has(operation)) {
       response.status(400).json({ error: "invalid_capability_check" });
       return;
     }
-    response.json(engine.attemptCapability(branch, operation));
+    Promise.resolve(engine.attemptCapability(branch, operation))
+      .then((result) => response.json(result))
+      .catch(next);
   });
 
   app.post("/api/actions/purchase", async (request, response, next) => {

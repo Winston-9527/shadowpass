@@ -31,6 +31,8 @@ contract Deploy is Script {
     uint64 private constant WINDOW = 10;
     uint64 private constant CLOCK_SKEW = 60;
     uint256 private constant DEMO_VAULT_FUNDING = 1_000_000 * 10 ** 6;
+    uint256 private constant DEMO_ANNUAL_RATE_BPS = 500;
+    uint256 private constant DEMO_YIELD_ACCELERATION = 73;
 
     struct Deployment {
         address gate;
@@ -106,7 +108,8 @@ contract Deploy is Script {
         );
         require(d.gate == predictedGate, "gate address prediction failed");
 
-        d.vault = address(new MockVault(IERC20(d.token), "Mock USD Vault", "mvUSD", 500, 100_000));
+        // The vault is prefunded, so accelerate proportionally to give the new 20 spUSD deposit about 1% over 24 hours.
+        d.vault = address(new MockVault(IERC20(d.token), "Mock USD Vault", "mvUSD", DEMO_ANNUAL_RATE_BPS, DEMO_YIELD_ACCELERATION));
         d.payout = address(new ShadowPayout(d.gate, IERC20(d.token)));
         d.treasury = address(new TreasuryAdapter(d.gate, IERC20(d.token), deployer));
 

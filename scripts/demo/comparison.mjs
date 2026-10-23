@@ -23,6 +23,7 @@ export function buildComparison({
         title: "ShadowPass：池内授权 + 承诺",
         visible: [
           "调用 Gate，证明资金属于某个未被吊销的授权分支",
+          "开通、发卡、划拨与 execute 由 facilitator relay 代付",
           "TREASURY 方法和金额",
           "一次性 budget nullifier",
           "白名单金库与预先承诺的 returnCm",
@@ -66,6 +67,7 @@ export function buildComparison({
       title: "ShadowPass：一次付款，一个池内承诺",
       visible: [
         "Gate.execute 与支付金额",
+        "开通、发卡、划拨与 execute 由 facilitator relay 代付",
         "商户 payTo 和请求哈希",
         "一次性 nullifier 与找零承诺",
         "只有主人查看钥能解开的委托链密文",

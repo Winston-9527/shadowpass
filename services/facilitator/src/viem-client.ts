@@ -26,10 +26,16 @@ const registryAbi = [...shadowErrorAbi, ...parseAbi([
 const tokenAbi = [...shadowErrorAbi, ...parseAbi([
   "function faucetDeposit((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 cm,uint256 q,bytes memo)",
 ] as const)] as const;
+const executeAbi = parseAbi([
+  "function execute((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,(uint256 issued,uint256 revoked,uint256 root) roots,uint64 nowTs,(address target,bytes4 method,uint256 amount,uint256 nonce,bytes params) action,uint256[] ct,(uint256 noteRoot,uint256 budgetNf,uint256 cmChange,uint256 qSpent) budget,bytes memoChange)",
+] as any);
 const gateAbi = [...shadowErrorAbi, ...parseAbi([
   "function issue(uint256 certHash)",
   "function transferBudget((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 noteRoot,uint256 revokedRoot,uint256 nullifier,uint256 cm1,uint256 cm2,bytes memo1,bytes memo2)",
   "function registerState(uint256 issued,uint256 revoked,uint256 root) returns (uint256)",
+] as const)] as const;
+const treasuryAbi = [...shadowErrorAbi, ...parseAbi([
+  "function withdraw(uint256 positionId)",
 ] as const)] as const;
 const revocationsAbi = [...shadowErrorAbi, ...parseAbi([
   "function revoke((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 newRoot,uint256 entry)",
@@ -317,6 +323,70 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
               abi: gateAbi,
               functionName: "registerState",
               args: [BigInt(String(args.issued)), BigInt(String(args.revoked)), BigInt(String(args.root))],
+            }),
+          );
+        case "execute": {
+          const roots = args.roots as Record<string, unknown>;
+          const action = args.action as Record<string, unknown>;
+          const budget = args.budget as Record<string, unknown>;
+          const callArgs = [
+            args.proof as any,
+            {
+              issued: BigInt(String(roots.issued)),
+              revoked: BigInt(String(roots.revoked)),
+              root: BigInt(String(roots.root)),
+            },
+            BigInt(String(args.nowTs)),
+            {
+              target: String(action.target) as Address,
+              method: String(action.method) as Hex,
+              amount: BigInt(String(action.amount)),
+              nonce: BigInt(String(action.nonce)),
+              params: String(action.params) as Hex,
+            },
+            (args.ct as unknown[]).map((value) => BigInt(String(value))),
+            {
+              noteRoot: BigInt(String(budget.noteRoot)),
+              budgetNf: BigInt(String(budget.budgetNf)),
+              cmChange: BigInt(String(budget.cmChange)),
+              qSpent: BigInt(String(budget.qSpent)),
+            },
+            String(args.memoChange) as Hex,
+          ] as const;
+          return send(
+            options.publicClient.simulateContract({
+              account,
+              address: options.deployment.gate,
+              abi: executeAbi as any,
+              functionName: "execute",
+              args: callArgs as any,
+            }),
+            () => options.walletClient.writeContract({
+              account,
+              chain: null,
+              address: options.deployment.gate,
+              abi: executeAbi as any,
+              functionName: "execute",
+              args: callArgs as any,
+            }),
+          );
+        }
+        case "treasuryWithdraw":
+          return send(
+            options.publicClient.simulateContract({
+              account,
+              address: options.deployment.treasury,
+              abi: treasuryAbi,
+              functionName: "withdraw",
+              args: [BigInt(String(args.positionId))],
+            }),
+            () => options.walletClient.writeContract({
+              account,
+              chain: null,
+              address: options.deployment.treasury,
+              abi: treasuryAbi,
+              functionName: "withdraw",
+              args: [BigInt(String(args.positionId))],
             }),
           );
       }

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { once } from "node:events";
 
 export const CIRCUITS = [
   "main_d2",
@@ -19,8 +20,10 @@ const VERIFIERS = {
 
 const PTAU_NAME = "powersOfTau28_hez_final_18.ptau";
 const PTAU_URL = process.env.SHADOWPASS_PTAU_URL
-  ?? `https://storage.googleapis.com/zkevm/ptau/${PTAU_NAME}`;
+  ?? `https://circom.info/${PTAU_NAME}`;
 const PTAU_SHA256 = "e970efa7774da80101e0ac336d083ef3339855c98112539338d706b2b89ac694";
+const PTAU_SIZE = 302_072_984;
+const PTAU_DOWNLOAD_ATTEMPTS = 6;
 
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
@@ -184,6 +187,74 @@ function run(command, args, cwd, env = process.env) {
   if (result.status !== 0) throw new Error(`${command} ${args.join(" ")} failed with exit ${result.status}`);
 }
 
+async function downloadPtau(file) {
+  const temporary = `${file}.download`;
+  let previousBytes = -1;
+
+  for (let attempt = 1; attempt <= PTAU_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    let existing = fs.existsSync(temporary) ? fs.statSync(temporary).size : 0;
+    if (existing === PTAU_SIZE && sameFileHash(temporary, PTAU_SHA256)) return;
+    if (existing > PTAU_SIZE || (existing === PTAU_SIZE && !sameFileHash(temporary, PTAU_SHA256))) {
+      fs.rmSync(temporary, { force: true });
+      existing = 0;
+    }
+
+    if (attempt > 1) {
+      console.log(`[demo] PTAU 下载重试 ${attempt}/${PTAU_DOWNLOAD_ATTEMPTS}，从 ${existing} 字节续传`);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(attempt * 1_000, 5_000)));
+    }
+
+    let output;
+    let watchdog;
+    try {
+      const controller = new AbortController();
+      watchdog = setTimeout(() => controller.abort(), 120_000);
+      const response = await fetch(PTAU_URL, {
+        headers: existing > 0 ? { range: `bytes=${existing}-` } : {},
+        signal: controller.signal,
+      });
+      if (response.status === 416 && existing === PTAU_SIZE) {
+        clearTimeout(watchdog);
+        if (sameFileHash(temporary, PTAU_SHA256)) return;
+        fs.rmSync(temporary, { force: true });
+        continue;
+      }
+      if (!response.ok || !response.body) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const append = response.status === 206 && existing > 0;
+      let written = append ? existing : 0;
+      let lastReported = written;
+      output = fs.createWriteStream(temporary, { flags: append ? "a" : "w" });
+      for await (const chunk of response.body) {
+        clearTimeout(watchdog);
+        watchdog = setTimeout(() => controller.abort(), 120_000);
+        if (!output.write(Buffer.from(chunk))) await once(output, "drain");
+        written += chunk.length;
+        if (written - lastReported >= 25 * 1024 * 1024) {
+          console.log(`[demo] PTAU 已写入 ${(written / 1024 / 1024).toFixed(1)} MiB`);
+          lastReported = written;
+        }
+      }
+      output.end();
+      await once(output, "finish");
+      clearTimeout(watchdog);
+
+      if (written === PTAU_SIZE && sameFileHash(temporary, PTAU_SHA256)) return;
+      console.log(`[demo] PTAU 第 ${attempt} 次下载未完成或不完整，保留 ${written} 字节`);
+      if (written <= previousBytes) fs.rmSync(temporary, { force: true });
+      previousBytes = Math.max(previousBytes, written);
+    } catch (error) {
+      clearTimeout(watchdog);
+      output?.destroy();
+      console.log(`[demo] PTAU 下载中断：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  throw new Error(`ptau download failed after ${PTAU_DOWNLOAD_ATTEMPTS} attempts`);
+}
+
 async function ensurePtau(root) {
   const file = path.join(root, "artifacts", "ptau", PTAU_NAME);
   if (process.env.SHADOWPASS_PTAU) {
@@ -204,30 +275,15 @@ async function ensurePtau(root) {
   }
   if (fs.existsSync(file)) {
     const actual = sha256(fs.readFileSync(file));
-    if (actual !== PTAU_SHA256) throw new Error(`ptau hash mismatch: ${actual}`);
-    return file;
+    if (actual === PTAU_SHA256) return file;
+    console.log(`[demo] 本地 PTAU 哈希不匹配，重新下载：${actual}`);
+    fs.rmSync(file, { force: true });
   }
 
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.download`;
-  console.log(`[demo] 下载 ${PTAU_NAME}（约 70 MB）`);
-  const response = await fetch(PTAU_URL);
-  if (!response.ok || !response.body) {
-    throw new Error(
-      `ptau download failed: HTTP ${response.status}. 可下载官方 ${PTAU_NAME} 后设置 SHADOWPASS_PTAU=/绝对路径`,
-    );
-  }
-  const output = fs.createWriteStream(temporary);
-  await new Promise(async (resolve, reject) => {
-    output.on("finish", resolve);
-    output.on("error", reject);
-    try {
-      for await (const chunk of response.body) output.write(Buffer.from(chunk));
-      output.end();
-    } catch (error) {
-      reject(error);
-    }
-  });
+  console.log(`[demo] 下载 ${PTAU_NAME}（${(PTAU_SIZE / 1_000_000).toFixed(1)} MB，支持断点续传）`);
+  await downloadPtau(file);
   const actual = sha256(fs.readFileSync(temporary));
   if (actual !== PTAU_SHA256) {
     fs.rmSync(temporary, { force: true });

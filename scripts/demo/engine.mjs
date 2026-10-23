@@ -22,10 +22,10 @@ import {
   loadArtifacts,
   mintInput,
   noteCm,
-  openChain,
   prove,
   registerInput,
   reqHash,
+  scanBill,
   toCalldata,
   transferInput,
 } from "@shadowpass/sdk";
@@ -50,17 +50,8 @@ const groupAbi = parseAbi([
   "function currentRoot() view returns (uint256)",
   "function size() view returns (uint256)",
 ]);
-const registryAbi = parseAbi([
-  `function register(${proof},uint256 groupRoot,uint256 nf,uint256 leaf0,uint256[] siblingNodes)`,
-]);
 const tokenAbi = parseAbi([
   `function faucetDeposit(${proof},uint256 cm,uint256 q,bytes memo)`,
-]);
-const gateAbi = parseAbi([
-  "function issue(uint256 certHash)",
-  `function transferBudget(${proof},uint256 noteRoot,uint256 revokedRoot,uint256 nullifier,uint256 cm1,uint256 cm2,bytes memo1,bytes memo2)`,
-  `function execute(${proof},(uint256 issued,uint256 revoked,uint256 root) roots,uint64 nowTs,(address target,bytes4 method,uint256 amount,uint256 nonce,bytes params) action,uint256[] ct,(uint256 noteRoot,uint256 budgetNf,uint256 cmChange,uint256 qSpent) budget,bytes memoChange)`,
-  "function registerState(uint256 issued,uint256 revoked,uint256 root) returns (uint256)",
 ]);
 const treasuryAbi = parseAbi([
   "function quote(address vault,uint256 amount,uint256 term) view returns (uint256)",
@@ -84,18 +75,24 @@ function randomHex(label) {
   return `0x${sha256(`shadowpass-demo:${label}:${crypto.randomUUID()}`).toString("hex")}`;
 }
 
-function deterministicRandom(label) {
-  let counter = 0;
-  return (length) => {
-    const chunks = [];
-    let size = 0;
-    while (size < length) {
-      const chunk = sha256(`${label}:${counter++}`);
-      chunks.push(chunk);
-      size += chunk.length;
+function random250() {
+  return BigInt(`0x${crypto.randomBytes(32).toString("hex")}`) % (1n << 250n);
+}
+
+function replayableRandomSource() {
+  let bytes = Buffer.alloc(0);
+  let offset = 0;
+  const read = (length) => {
+    while (offset + length > bytes.length) {
+      bytes = Buffer.concat([bytes.subarray(offset), crypto.randomBytes(Math.max(length, 64))]);
+      offset = 0;
     }
-    return Buffer.concat(chunks).subarray(0, length);
+    const value = bytes.subarray(offset, offset + length);
+    offset += length;
+    return value;
   };
+  read.reset = () => { offset = 0; };
+  return read;
 }
 
 function ensure(condition, message) {
@@ -110,6 +107,7 @@ function jsonSafe(value) {
   return JSON.parse(JSON.stringify(value, (_key, child) => typeof child === "bigint" ? child.toString() : child));
 }
 
+const PAY_METHOD = keccak256(toHex("shadowpass.PAY")).slice(0, 10);
 const TREASURY_METHOD = keccak256(toHex("shadowpass.TREASURY_SUPPLY")).slice(0, 10);
 
 export class DemoEngine {
@@ -119,6 +117,7 @@ export class DemoEngine {
     this.rpcUrl = options.rpcUrl;
     this.merchantUrl = options.merchantUrl;
     this.facilitatorUrl = options.facilitatorUrl;
+    this.facilitatorAddress = options.facilitatorAddress;
     this.merchantPayTo = options.merchantPayTo;
     this.artifactDir = options.artifactDir;
     this.manifestHashes = options.manifestHashes;
@@ -162,9 +161,30 @@ export class DemoEngine {
       label: label ?? functionName,
       hash,
       blockNumber: Number(receipt.blockNumber),
+      sender: client.account?.address ?? null,
     };
     this.transactions.push(record);
     return { hash, receipt, record };
+  }
+
+  async relay(action, args, label) {
+    const response = await fetch(`${this.facilitatorUrl}/relay/${action}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ args }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.transaction) {
+      throw new Error(`${label ?? action} relay failed: ${result.error ?? response.status}`);
+    }
+    const record = {
+      label: label ?? action,
+      hash: result.transaction,
+      blockNumber: Number(result.blockNumber),
+      sender: this.facilitatorAddress ?? null,
+    };
+    this.transactions.push(record);
+    return { hash: result.transaction, record, logs: result.logs ?? [] };
   }
 
   async prove(circuit, input) {
@@ -203,13 +223,11 @@ export class DemoEngine {
   async registerCurrentState(label = "register state roots") {
     await this.sync();
     const roots = this.roots();
-    await this.send({
-      address: this.deployment.gate,
-      abi: gateAbi,
-      functionName: "registerState",
-      args: [roots.issued, roots.revoked, roots.root],
-      label,
-    });
+    await this.relay("registerState", {
+      issued: roots.issued.toString(),
+      revoked: roots.revoked.toString(),
+      root: roots.root.toString(),
+    }, label);
     await this.sync();
   }
 
@@ -253,13 +271,7 @@ export class DemoEngine {
 
   async registerAlice(alice, steward, cert0) {
     const commitment = poseidon2([alice.sign.Ax, alice.sign.Ay]);
-    await this.send({
-      address: this.deployment.group,
-      abi: groupAbi,
-      functionName: "join",
-      args: [commitment],
-      label: "加入身份组",
-    });
+    await this.relay("join", { commitment: commitment.toString() }, "加入身份组");
     await this.sync();
     const chainGroupRoot = await this.publicClient.readContract({
       address: this.deployment.group,
@@ -283,19 +295,13 @@ export class DemoEngine {
       state: this.state,
     });
     const result = await this.prove("main_reg", witness);
-    await this.send({
-      address: this.deployment.registry,
-      abi: registryAbi,
-      functionName: "register",
-      args: [
-        result.proof,
-        BigInt(witness.group_root),
-        BigInt(witness.nf_domain),
-        BigInt(witness.leaf0),
-        witness.siblings.map((value) => BigInt(value)),
-      ],
-      label: "注册 Alice 根凭证",
-    });
+    await this.relay("register", {
+      proof: result.proof,
+      groupRoot: String(witness.group_root),
+      nf: String(witness.nf_domain),
+      leaf0: String(witness.leaf0),
+      siblingNodes: witness.siblings.map(String),
+    }, "注册 Alice 根凭证");
     await this.sync();
     return { commitment, proofMs: result.proofMs };
   }
@@ -309,13 +315,12 @@ export class DemoEngine {
     };
     const result = await this.prove("budget_mint", mintInput(note));
     const memo = await encodeNoteMemo(note, alice.box.publicKey);
-    await this.send({
-      address: this.deployment.token,
-      abi: tokenAbi,
-      functionName: "faucetDeposit",
-      args: [result.proof, noteCm(note), note.q, toHex(memo)],
-      label: "Alice 入金 75 spUSD",
-    });
+    await this.relay("faucetDeposit", {
+      proof: result.proof,
+      cm: noteCm(note).toString(),
+      q: note.q.toString(),
+      memo: toHex(memo),
+    }, "Alice 入金 75 spUSD");
     await this.sync();
     return { note, proofMs: result.proofMs };
   }
@@ -329,28 +334,22 @@ export class DemoEngine {
       q1: firstAmount,
       q2: secondAmount,
       state: this.state,
-      random: deterministicRandom(`${label}:transfer`),
+      random: replayableRandomSource(),
     });
     const result = await this.prove("budget_transfer", witness.input);
     const memo1 = await encodeNoteMemo(witness.out1, child.holder === holder ? holder.box?.publicKey : this.agentBox(child.holder.Ax));
     const memo2 = await encodeNoteMemo(witness.out2, this.stewardBox);
     const publicSignals = result.publicSignals;
-    await this.send({
-      address: this.deployment.gate,
-      abi: gateAbi,
-      functionName: "transferBudget",
-      args: [
-        result.proof,
-        BigInt(publicSignals[0]),
-        BigInt(publicSignals[1]),
-        BigInt(publicSignals[2]),
-        BigInt(publicSignals[3]),
-        BigInt(publicSignals[4]),
-        toHex(memo1),
-        toHex(memo2),
-      ],
-      label,
-    });
+    await this.relay("transferBudget", {
+      proof: result.proof,
+      noteRoot: String(publicSignals[0]),
+      revokedRoot: String(publicSignals[1]),
+      nullifier: String(publicSignals[2]),
+      cm1: String(publicSignals[3]),
+      cm2: String(publicSignals[4]),
+      memo1: toHex(memo1),
+      memo2: toHex(memo2),
+    }, label);
     await this.sync();
     return { out1: witness.out1, out2: witness.out2, proofMs: result.proofMs };
   }
@@ -391,20 +390,8 @@ export class DemoEngine {
     const registration = await this.registerAlice(alice, steward, cert0);
     const buyerCert = issue(cert0, buyer.sign, PAY, expiry);
     const treasuryCert = issue(cert0, treasury.sign, TREASURY, expiry);
-    await this.send({
-      address: this.deployment.gate,
-      abi: gateAbi,
-      functionName: "issue",
-      args: [buyerCert.hash],
-      label: "签发采购凭证",
-    });
-    await this.send({
-      address: this.deployment.gate,
-      abi: gateAbi,
-      functionName: "issue",
-      args: [treasuryCert.hash],
-      label: "签发理财凭证",
-    });
+    await this.relay("issue", { certHash: buyerCert.hash.toString() }, "签发采购凭证");
+    await this.relay("issue", { certHash: treasuryCert.hash.toString() }, "签发理财凭证");
     await this.sync();
 
     const deposit = await this.depositStewardNote(alice, steward, cert0);
@@ -453,7 +440,7 @@ export class DemoEngine {
       own: [this.identities.treasury.sign.Ax, this.identities.treasury.sign.Ay],
       q: quote,
       lin: [this.certificates.cert0.hash, this.certificates.treasury.hash, 0n, 0n],
-      rho: BigInt(`0x${sha256("treasury-return-note").toString("hex")}`) % (1n << 250n),
+      rho: random250(),
     };
     const returnMemo = await encodeNoteMemo(returnNote, this.identities.treasury.box.publicKey);
     const nonce = BigInt(`0x${randomHex("treasury-nonce").slice(2)}`) % (1n << 250n);
@@ -474,8 +461,8 @@ export class DemoEngine {
       nonce,
       params,
     };
-    const memoChangeLabel = "treasury-change";
-    const placeholder = randomHex(memoChangeLabel);
+    const placeholder = randomHex("treasury-change");
+    const random = replayableRandomSource();
     const first = actionInput({
       chain: [this.certificates.cert0, this.certificates.treasury],
       holderSk: this.identities.treasury.sign.sk,
@@ -485,10 +472,11 @@ export class DemoEngine {
       reqCap: TREASURY,
       now: (await this.publicClient.getBlock({ blockTag: "latest" })).timestamp,
       state: this.state,
-      random: deterministicRandom(memoChangeLabel),
+      random,
     });
     const memoChange = await encodeNoteMemo(first.change, this.identities.treasury.box.publicKey);
     const now = (await this.publicClient.getBlock({ blockTag: "latest" })).timestamp;
+    random.reset();
     const built = actionInput({
       chain: [this.certificates.cert0, this.certificates.treasury],
       holderSk: this.identities.treasury.sign.sk,
@@ -498,40 +486,45 @@ export class DemoEngine {
       reqCap: TREASURY,
       now,
       state: this.state,
-      random: deterministicRandom(memoChangeLabel),
+      random,
     });
     const proofResult = await this.prove("main_d2", built.input);
     const publicSignals = proofResult.publicSignals;
     const ctLength = 8;
     const ct = publicSignals.slice(4, 4 + ctLength);
     const roots = this.roots();
-    const tx = await this.send({
-      address: this.deployment.gate,
-      abi: gateAbi,
-      functionName: "execute",
-      args: [
-        proofResult.proof,
-        roots,
-        now,
-        action,
-        ct.map((value) => BigInt(value)),
-        {
-          noteRoot: BigInt(publicSignals[12]),
-          budgetNf: BigInt(publicSignals[13]),
-          cmChange: BigInt(publicSignals[14]),
-          qSpent: BigInt(publicSignals[15]),
-        },
-        toHex(memoChange),
-      ],
-      label: "理财 Agent 存入白名单金库",
-    });
+    const tx = await this.relay("execute", {
+      proof: proofResult.proof,
+      roots: {
+        issued: roots.issued.toString(),
+        revoked: roots.revoked.toString(),
+        root: roots.root.toString(),
+      },
+      nowTs: now.toString(),
+      action: {
+        target: action.target,
+        method: action.method,
+        amount: action.amount.toString(),
+        nonce: action.nonce.toString(),
+        params: action.params,
+      },
+      ct: ct.map(String),
+      budget: {
+        noteRoot: String(publicSignals[12]),
+        budgetNf: String(publicSignals[13]),
+        cmChange: String(publicSignals[14]),
+        qSpent: String(publicSignals[15]),
+      },
+      memoChange: toHex(memoChange),
+    }, "理财 Agent 存入白名单金库");
     const nextPositionId = await this.publicClient.readContract({
       address: this.deployment.treasury,
       abi: treasuryAbi,
       functionName: "nextPositionId",
     });
     const positionId = nextPositionId - 1n;
-    const ownerView = this.decryptOwnerChain(built.ct);
+    await this.sync();
+    const ownerView = await this.ownerViewFromChain(built.input.budget_nf, tx.hash);
     this.notes.treasury = built.change;
     this.notes.treasuryReturn = returnNote;
     this.positions = { supply: true, positionId, returnCm: noteCm(returnNote), expectedQ: quote, term, tx: tx.hash };
@@ -543,10 +536,10 @@ export class DemoEngine {
       tx: tx.hash,
       proofMs: proofResult.proofMs,
       ownerView,
+      ownerCt: ct.map(String),
       createdAt: new Date().toISOString(),
     };
     this.actions.push(record);
-    await this.sync();
     return { record: jsonSafe(record), comparison: jsonSafe(this.comparison("treasury")) };
   }
 
@@ -555,13 +548,11 @@ export class DemoEngine {
     ensure(!this.positions.withdraw, "treasury position already withdrawn");
     await this.publicClient.request({ method: "evm_increaseTime", params: [Number(TERM_SECONDS + 1n)] });
     await this.publicClient.request({ method: "evm_mine", params: [] });
-    const tx = await this.send({
-      address: this.deployment.treasury,
-      abi: treasuryAbi,
-      functionName: "withdraw",
-      args: [this.positions.positionId],
-      label: "到期赎回并生成承诺票据",
-    });
+    const tx = await this.relay(
+      "treasuryWithdraw",
+      { positionId: this.positions.positionId.toString() },
+      "到期赎回并生成承诺票据",
+    );
     await this.sync();
     ensure(this.state.notes.leaves.includes(noteCm(this.notes.treasuryReturn)), "return note was not inserted");
     this.positions.withdraw = true;
@@ -603,8 +594,8 @@ export class DemoEngine {
           params,
         };
         const now = (await this.publicClient.getBlock({ blockTag: "latest" })).timestamp;
-        const memoLabel = "purchase-change";
-        const placeholder = randomHex(memoLabel);
+        const placeholder = randomHex("purchase-change");
+        const random = replayableRandomSource();
         const first = actionInput({
           chain: [this.certificates.cert0, this.certificates.buyer],
           holderSk: holder.sign.sk,
@@ -614,9 +605,10 @@ export class DemoEngine {
           reqCap: PAY,
           now,
           state: this.state,
-          random: deterministicRandom(memoLabel),
+          random,
         });
         const memoChange = await encodeNoteMemo(first.change, holder.box.publicKey);
+        random.reset();
         const built = actionInput({
           chain: [this.certificates.cert0, this.certificates.buyer],
           holderSk: holder.sign.sk,
@@ -626,7 +618,7 @@ export class DemoEngine {
           reqCap: PAY,
           now,
           state: this.state,
-          random: deterministicRandom(memoLabel),
+          random,
         });
         const proved = await this.prove("main_d2", built.input);
         const ct = proved.publicSignals.slice(4, 12);
@@ -654,8 +646,9 @@ export class DemoEngine {
         payload.timings = { proofMs: proved.proofMs };
         this.pendingPurchase = {
           note: built.change,
-          ownerView: this.decryptOwnerChain(built.ct),
+          budgetNf: built.input.budget_nf,
           proofMs: proved.proofMs,
+          ownerCt: ct.map(String),
         };
         return payload;
       },
@@ -678,9 +671,9 @@ export class DemoEngine {
     this.notes.buyer = this.pendingPurchase.note;
     await this.sync();
     ensure(this.state.notes.leaves.includes(noteCm(this.notes.buyer)), "purchase change note was not inserted");
-
     const metrics = await fetch(`${this.facilitatorUrl}/metrics`).then((item) => item.json());
     const settlement = [...metrics.records].reverse().find((record) => record.operation === "settle" && record.transaction);
+    const ownerView = await this.ownerViewFromChain(this.pendingPurchase.budgetNf, settlement?.transaction);
     const record = {
       operation: "purchase",
       label: "采购 Agent 通过 x402 购买市场报告",
@@ -688,7 +681,8 @@ export class DemoEngine {
       payTo: this.merchantPayTo,
       tx: settlement?.transaction ?? null,
       proofMs: this.pendingPurchase.proofMs,
-      ownerView: this.pendingPurchase.ownerView,
+      ownerView,
+      ownerCt: this.pendingPurchase.ownerCt,
       merchantBody: body,
       createdAt: new Date().toISOString(),
     };
@@ -700,16 +694,25 @@ export class DemoEngine {
     };
   }
 
-  decryptOwnerChain(ciphertext) {
-    const points = openChain(ciphertext, this.identities.alice.view.vsk);
-    ensure(points, "owner could not decrypt chain");
+  async ownerViewFromChain(budgetNf, transaction) {
+    const logs = await this.publicClient.getLogs({
+      address: this.deployment.gate,
+      fromBlock: BigInt(this.deployment.startBlock),
+      toBlock: "latest",
+    });
+    const bill = scanBill(this.state, logs, this.identities.alice.view.vsk)
+      .find((entry) => entry.budgetNf === BigInt(budgetNf));
+    ensure(bill?.chain, `owner could not decrypt on-chain ciphertext for ${budgetNf}`);
+    if (transaction) {
+      ensure(String(bill.txHash).toLowerCase() === transaction.toLowerCase(), "owner view transaction mismatch");
+    }
     const labels = new Map([
       [pointKey({ x: this.identities.alice.sign.Ax, y: this.identities.alice.sign.Ay }), "Alice"],
       [pointKey({ x: this.identities.steward.sign.Ax, y: this.identities.steward.sign.Ay }), "管家"],
       [pointKey({ x: this.identities.buyer.sign.Ax, y: this.identities.buyer.sign.Ay }), "采购 Agent"],
       [pointKey({ x: this.identities.treasury.sign.Ax, y: this.identities.treasury.sign.Ay }), "理财 Agent"],
     ]);
-    return points.map((point) => labels.get(pointKey(point)) ?? "未知实体");
+    return bill.chain.map((point) => labels.get(pointKey(point)) ?? "未知实体");
   }
 
   comparison(operation = "purchase") {
@@ -746,7 +749,7 @@ export class DemoEngine {
       generatedAt: new Date().toISOString(),
       startedAt: this.startedAt,
       simulated: true,
-      simulatedLabel: "本地模拟环境 · 链上交易真实执行 · 20 个匿名集用户为预置数据",
+      simulatedLabel: "票据层匿名集为预置模拟数据；身份层匿名集仍为 1，这是当前演示限制",
       network: {
         name: "Anvil",
         chainId: this.deployment.chainId,
@@ -762,7 +765,8 @@ export class DemoEngine {
         simulatedDeposits: this.simulated.reduce((sum, item) => sum + item.q, 0n).toString(),
         noteSetSize: this.state?.notes.size ?? 0,
         registeredIdentities: this.state?.group.size ?? 0,
-        note: "模拟用户分别从独立本地账户入金；界面和分析材料都将其标为预置数据。",
+        identitySetSize: this.state?.group.size ?? 0,
+        note: "20 个模拟用户只扩展票据层匿名集；根凭证身份层匿名集仍为 1。",
       },
       story: {
         owner: "Alice",
@@ -788,21 +792,81 @@ export class DemoEngine {
     });
   }
 
-  attemptCapability(branch, operation) {
+  async attemptCapability(branch, operation) {
     const capabilities = branch === "buyer" ? PAY : branch === "treasury" ? TREASURY : 0n;
     const required = operation === "purchase" ? PAY : TREASURY;
     const allowed = (capabilities & required) === required;
-    return {
-      allowed,
-      branch,
-      operation,
-      reason: allowed ? "capability_granted" : "capability_mismatch",
-      explanation: allowed
-        ? "能力位允许该操作"
-        : operation === "treasury"
-          ? "采购凭证没有 TREASURY，电路会拒绝该操作"
-          : "理财凭证没有 PAY，电路会拒绝该操作",
-    };
+    if (allowed) {
+      return {
+        allowed: true,
+        branch,
+        operation,
+        reason: "capability_granted",
+        explanation: "能力位允许该操作",
+      };
+    }
+
+    const amount = USDC;
+    const nonce = random250();
+    const memoChange = randomHex("capability-probe");
+    const action = operation === "treasury"
+      ? {
+          target: this.deployment.treasury,
+          method: TREASURY_METHOD,
+          amount,
+          nonce,
+          params: encodeAbiParameters(
+            [{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "bytes" }],
+            [this.deployment.vault, TERM_SECONDS, 1n, 1n, "0x"],
+          ),
+        }
+      : {
+          target: this.deployment.payout,
+          method: PAY_METHOD,
+          amount,
+          nonce,
+          params: encodeAbiParameters(
+            [{ type: "address" }, { type: "bytes32" }],
+            ["0x0000000000000000000000000000000000000000", `0x${"00".repeat(32)}`],
+          ),
+        };
+    const branchState = branch === "treasury"
+      ? {
+          chain: [this.certificates.cert0, this.certificates.treasury],
+          holderSk: this.identities.treasury.sign.sk,
+          note: this.notes.treasury,
+          reqCap: required,
+        }
+      : {
+          chain: [this.certificates.cert0, this.certificates.buyer],
+          holderSk: this.identities.buyer.sign.sk,
+          note: this.notes.buyer,
+          reqCap: required,
+        };
+    const now = (await this.publicClient.getBlock({ blockTag: "latest" })).timestamp;
+    const probe = actionInput({
+      ...branchState,
+      qSpent: amount,
+      ctxHash: ctxHash({ chainId: this.deployment.chainId, gate: this.deployment.gate, action, memoChange }),
+      now,
+      state: this.state,
+      random: replayableRandomSource(),
+    });
+    try {
+      await this.prove("main_d2", probe.input);
+      throw new Error("circuit unexpectedly accepted an unauthorized capability");
+    } catch (error) {
+      if (String(error?.message).includes("unexpectedly accepted")) throw error;
+      const lines = String(error?.message ?? error).split("\n").map((line) => line.trim()).filter(Boolean);
+      const detail = lines.find((line) => line.includes("CapSubset")) ?? lines[0] ?? String(error);
+      return {
+        allowed: false,
+        branch,
+        operation,
+        reason: "circuit_rejected",
+        explanation: `证明器拒绝：${detail}`,
+      };
+    }
   }
 
   serialized(task) {

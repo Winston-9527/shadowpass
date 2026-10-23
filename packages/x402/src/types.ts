@@ -97,7 +97,9 @@ export type RelayAction =
   | "issue"
   | "transferBudget"
   | "revoke"
-  | "registerState";
+  | "registerState"
+  | "execute"
+  | "treasuryWithdraw";
 
 export const RELAY_ACTIONS = [
   "join",
@@ -107,6 +109,8 @@ export const RELAY_ACTIONS = [
   "transferBudget",
   "revoke",
   "registerState",
+  "execute",
+  "treasuryWithdraw",
 ] as const satisfies readonly RelayAction[];
 
 export interface RelayResult {

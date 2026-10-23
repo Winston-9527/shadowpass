@@ -31,6 +31,14 @@ async function waitForText(page, selector, expected, timeout = 90_000) {
   );
 }
 
+async function waitForTextContaining(page, selector, expected, timeout = 90_000) {
+  await page.waitForFunction(
+    ({ selector, expected }) => document.querySelector(selector)?.textContent?.includes(expected),
+    { selector, expected },
+    { timeout },
+  );
+}
+
 async function assertNoHorizontalOverflow(page, label) {
   const dimensions = await page.evaluate(() => ({
     viewport: window.innerWidth,
@@ -90,17 +98,17 @@ try {
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.waitForFunction(() => document.querySelector("#note-set")?.textContent?.includes("25"));
 
-  ensure((await text(page.locator("#simulated-count"))).includes("20 个模拟用户"), "simulation label is missing");
+  ensure((await text(page.locator("#simulated-count"))).includes("20 个票据层模拟用户"), "simulation label is missing");
   ensure((await text(page.locator("#simulation-copy"))).includes("模拟"), "simulation data is not disclosed");
   ensure((await text(page.locator("#simulated-deposits"))) === "20 spUSD", "simulated deposits mismatch");
   await assertNoHorizontalOverflow(page, "desktop initial view");
-  await caption(page, "1 / 5  20 个模拟用户提供匿名集，页面明确标注模拟数据");
+  await caption(page, "1 / 5  20 个模拟用户只扩展票据层匿名集；身份层匿名集仍为 1");
   await page.waitForTimeout(3_000);
 
-  await caption(page, "2 / 5  采购 Agent 只有 PAY，尝试 TREASURY 会被凭证和电路拒绝");
+  await caption(page, "2 / 5  采购 Agent 尝试 TREASURY，证明器在 CapSubset 约束处拒绝");
   await page.waitForTimeout(1_500);
   await page.locator('[data-capability="buyer"][data-operation="treasury"]').click();
-  await waitForText(page, "#buyer-check", "采购凭证没有 TREASURY，电路会拒绝该操作", 10_000);
+  await waitForTextContaining(page, "#buyer-check", "CapSubset", 20_000);
 
   await caption(page, "3 / 5  通过真实 x402 中间件购买报告，由 facilitator 代付并结算");
   await page.waitForTimeout(1_500);
