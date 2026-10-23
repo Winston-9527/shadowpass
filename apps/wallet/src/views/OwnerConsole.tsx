@@ -30,7 +30,7 @@ import { bytesToHex } from "../lib/bytes";
 import { BrowserWalletGateway, type WalletGateway } from "../flows/chain";
 import { getWalletState, saveWalletState } from "../keystore/db";
 import { DEFAULT_ALERT_RULES, alertRulesKey, evaluateBillAlerts, normalizeAlertRules, type AlertRules } from "../flows/alert-rules";
-import { loadBillSnapshot, type WalletBill } from "../flows/bill";
+import { loadBillSnapshot, type ChainDelegation, type ChainReceipt, type WalletBill } from "../flows/bill";
 import { deposit } from "../flows/deposit";
 import { deliverCardCredential, issueCard } from "../flows/issue";
 import { withCrossTabLock } from "../flows/lock";
@@ -94,6 +94,10 @@ function pendingPairing(pending: PendingBudgetTransfer): PairingPayload {
   };
 }
 
+function latestChainTime(bills: readonly WalletBill[]): number {
+  return bills.reduce((latest, bill) => Math.max(latest, bill.chainTimeMs), 0);
+}
+
 export function OwnerConsole({ session, config, gateway: injectedGateway, proofs: injectedProofs, mailer: injectedMailer }: OwnerConsoleProps) {
   const [tab, setTab] = useState<Tab>("wallet");
   const [ledger, setLedger] = useState<WalletLedger | null>(null);
@@ -106,6 +110,9 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
   const [busy, setBusy] = useState<Busy>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
+  const [chainRevision, setChainRevision] = useState(0);
+  const [chainClock, setChainClock] = useState({ chainTimeMs: 0, observedAtMs: Date.now() });
   const [pairInput, setPairInput] = useState(initialPairInput);
   const [pairing, setPairing] = useState<PairingPayload | null>(() => {
     if (!initialPairInput) return null;
@@ -119,18 +126,25 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
   const ledgerRef = useRef<WalletLedger | null>(null);
   const pollingRef = useRef(false);
   const busyRef = useRef(false);
+  const mailboxCursorRef = useRef(0);
+  const receiptsRef = useRef<ChainReceipt[]>([]);
+  const delegationsRef = useRef<ChainDelegation[]>([]);
 
   const gateway = useMemo(() => injectedGateway ?? new BrowserWalletGateway(config), [config, injectedGateway]);
   const proofs = useMemo(() => injectedProofs ?? new SnarkProofService(config.artifactsUrl), [config.artifactsUrl, injectedProofs]);
   const mailer = useMemo(() => injectedMailer ?? new MailboxClient(config.mailboxUrl), [config.mailboxUrl, injectedMailer]);
+  const alertNowMs = chainClock.chainTimeMs === 0
+    ? Date.now()
+    : chainClock.chainTimeMs + (Date.now() - chainClock.observedAtMs);
   const alerts = useMemo(
-    () => evaluateBillAlerts(bills, alertRules),
-    [alertRules, bills],
+    () => evaluateBillAlerts(bills, alertRules, alertNowMs),
+    [alertNowMs, alertRules, bills],
   );
-  const pageAlerts = useBillAlerts(alerts);
+  const alertHistoryStorageKey = `${alertRulesKey(config.deployment.chainId, config.network, session.bundle.sign.Ax)}:delivered`;
+  const pageAlerts = useBillAlerts(alerts, alertHistoryStorageKey);
   const tree = useMemo(
     () => ledger && chainState ? buildAuthorizationTree(ledger, session.bundle, chainState, bills) : null,
-    [bills, chainState, ledger, session.bundle],
+    [bills, chainRevision, chainState, ledger, session.bundle],
   );
   const maximumExpiryDays = ledger?.root
     ? Math.max(0, Math.floor((Number(ledger.root.expiry) * 1_000 - Date.now()) / 86_400_000))
@@ -145,18 +159,28 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
   const walletLockName = `shadowpass:wallet:${config.deployment.chainId}:${session.bundle.sign.Ax.toString()}`;
   const loadFreshLedger = () => loadLedger(config.deployment.chainId, config.network, session.bundle.sign.Ax);
 
-  const refresh = useCallback(async (currentLedger = ledgerRef.current) => {
-    if (!currentLedger) throw new Error("wallet ledger is not ready");
+  const refresh = useCallback(async () => {
+    const currentLedger = await loadFreshLedger();
+    ledgerRef.current = currentLedger;
+    setLedger(structuredClone(currentLedger));
     const snapshot = await loadBillSnapshot({
       ledger: currentLedger,
       gateway,
       mailbox: mailer,
       bundle: session.bundle,
+      mailboxCursor: mailboxCursorRef.current,
+      receipts: receiptsRef.current,
+      delegations: delegationsRef.current,
     });
+    mailboxCursorRef.current = snapshot.mailboxCursor;
+    receiptsRef.current = snapshot.receipts;
+    delegationsRef.current = snapshot.delegations;
     setChainState(snapshot.state);
     setBills(snapshot.bills);
+    setChainRevision((revision) => revision + 1);
+    setPollError(null);
     return snapshot.state;
-  }, [gateway, mailer, session.bundle]);
+  }, [config.deployment.chainId, config.network, gateway, mailer, session.bundle]);
 
   useEffect(() => {
     let active = true;
@@ -166,7 +190,8 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       try {
         const mounted = await withCrossTabLock(walletLockName, async () => {
           const base = await loadLedger(config.deployment.chainId, config.network, session.bundle.sign.Ax);
-          const [state, logs] = await Promise.all([gateway.sync(), gateway.logs()]);
+          const sync = await gateway.poll();
+          const state = sync.state;
           let records = base;
           let mailboxWarning: string | null = null;
           try {
@@ -176,7 +201,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
           }
           const restored = await recoverNotes(records, session.bundle, state);
           await saveLedger(restored);
-          return { restored, state, logs, mailboxWarning };
+          return { restored, state, logs: sync.logs, mailboxWarning };
         });
         if (!active) return;
         ledgerRef.current = mounted.restored;
@@ -187,10 +212,16 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
           gateway,
           mailbox: mailer,
           bundle: session.bundle,
+          receipts: receiptsRef.current,
+          delegations: delegationsRef.current,
         });
         if (!active) return;
+        mailboxCursorRef.current = billSnapshot.mailboxCursor;
+        receiptsRef.current = billSnapshot.receipts;
+        delegationsRef.current = billSnapshot.delegations;
         setChainState(billSnapshot.state);
         setBills(billSnapshot.bills);
+        setChainRevision((revision) => revision + 1);
         const rules = await getWalletState<AlertRules>(alertRulesKey(config.deployment.chainId, config.network, session.bundle.sign.Ax));
         const windowSeconds = await gateway.revocationWindow();
         if (!active) return;
@@ -214,18 +245,32 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
   useEffect(() => {
     if (!ledger) return;
     let active = true;
-    const interval = window.setInterval(() => {
+    const pollNow = () => {
       if (!active || pollingRef.current || busyRef.current) return;
       pollingRef.current = true;
       void refresh()
-        .catch((cause) => { if (active) setError(errorMessage(cause)); })
+        .catch((cause) => { if (active) setPollError(errorMessage(cause)); })
         .finally(() => { pollingRef.current = false; });
-    }, 7_000);
+    };
+    const interval = window.setInterval(pollNow, 7_000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") pollNow();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       active = false;
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [Boolean(ledger), refresh]);
+
+  useEffect(() => {
+    const latest = latestChainTime(bills);
+    if (latest === 0) return;
+    setChainClock((current) => current.chainTimeMs === latest
+      ? current
+      : { chainTimeMs: latest, observedAtMs: Date.now() });
+  }, [bills]);
 
   const run = async (kind: Exclude<Busy, null>, action: () => Promise<void>) => {
     busyRef.current = true;
@@ -448,7 +493,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       const windowSeconds = revocationWindowSeconds ?? await gateway.revocationWindow();
       setRevocationWindowSeconds(windowSeconds);
       setRevocationNotice(`${card.name} was revoked on-chain. The previous root remains valid for up to ${windowSeconds.toString()}s.`);
-      await refresh(ledger);
+      await refresh();
       if (!result.transaction) throw new Error("revocation transaction was not returned");
     } finally {
       setRevoking(null);
@@ -463,7 +508,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       const windowSeconds = revocationWindowSeconds ?? await gateway.revocationWindow();
       setRevocationWindowSeconds(windowSeconds);
       setRevocationNotice(`The authorization tree was revoked on-chain. Previous proofs remain valid for up to ${windowSeconds.toString()}s.`);
-      await refresh(ledger);
+      await refresh();
       if (!result.transaction) throw new Error("revocation transaction was not returned");
     } finally {
       setRevoking(null);
@@ -478,12 +523,14 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     );
   }
 
+  const readableBills = bills.filter((bill) => bill.chain !== null);
+  const displayError = error ?? pollError;
   const availableBudget = tree?.stewardBudget ?? 0n;
   const currentRoot = ledger.root;
   const pendingTransfer = ledger.pendingTransfer;
   const rootReady = Boolean(currentRoot && chainState && chainState.rootTree.indexOf(BigInt(currentRoot.hash)) >= 0);
   const expiryInvalid = Number(expiryDays) > maximumExpiryDays;
-  const unreportedCount = bills.filter((bill) => bill.chain !== null && !bill.reported).length;
+  const unreportedCount = readableBills.filter((bill) => !bill.reported).length;
 
   return (
     <div className="owner-console">
@@ -504,13 +551,17 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       </section>
 
       {progress && <section className="operation-banner"><LoaderCircle className="spin" size={16} />{progress}</section>}
-      {error && <section className="inline-error console-error" role="alert"><AlertTriangle size={16} /><span>{error}</span></section>}
+      {displayError && <section className="inline-error console-error" role="alert"><AlertTriangle size={16} /><span>{displayError}</span></section>}
       {pageAlerts.active.length > 0 && (
         <section className="page-alert" role="alert" data-testid="bill-alert">
           <div className="page-alert-icon"><AlertTriangle size={20} /></div>
-          <div>
-            <strong>{pageAlerts.active[0]!.title}</strong>
-            <span>{pageAlerts.active[0]!.detail}</span>
+          <div className="page-alert-copy">
+            <strong>{pageAlerts.active.length === 1 ? pageAlerts.active[0]!.title : `${pageAlerts.active.length} alerts need review`}</strong>
+            <ul>
+              {pageAlerts.active.map((alert) => (
+                <li key={alert.id}><span><b>{alert.title}:</b> {alert.detail}</span></li>
+              ))}
+            </ul>
           </div>
           <button className="button secondary compact" onClick={() => setTab("bills")}>Review bills</button>
           <button className="icon-button" onClick={pageAlerts.dismiss} title="Dismiss alert" aria-label="Dismiss alert"><X size={17} /></button>
@@ -625,7 +676,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
         </div>
       )}
 
-      {tab === "bills" && <Bill bills={bills} rules={alertRules} alerts={alerts} onChangeRules={handleAlertRules} />}
+      {tab === "bills" && <Bill bills={readableBills} rules={alertRules} alerts={alerts} onChangeRules={handleAlertRules} />}
 
       {tab === "tree" && tree && (
         <Tree

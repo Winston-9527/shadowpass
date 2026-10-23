@@ -15,7 +15,7 @@
 | B1 SDK：五棵树同步、witness、证明、票据备忘、凭证包 | ✅ #6，20/20 单元测试通过；Anvil 集成跳过（依赖 #3/#5）；Chrome D2 真实证明约 1.6 s |
 | C1 钱包骨架：PWA、passkey + PRF、SDK key 派生、`/slot` 恢复 | 🚧 #10，等待真实 Chrome/Google 密码管理器与 Vercel 证据 |
 | C2 钱包开通与发卡：群组、注册证明、充值、配对发卡、授权树、恢复 | 🚧 #11，第三轮 review 修复已完成；真实链与双标签页自动化通过；真机 MetaMask/Touch ID/扫码与 Base Sepolia 待补 |
-| C3 钱包账单与吊销：主人密文解密、收据对账、异常提醒、Agent/整树吊销 | 🚧 #12，账单与吊销实现完成；真机录屏待补 |
+| C3 钱包账单与吊销：主人密文解密、收据对账、异常提醒、Agent/整树吊销 | 🚧 #12，46/46 单元测试；增量同步、信箱游标、委托归属、30 秒防误报、吊销竞争重试、真实 D2 付款和 Chrome 自动化提醒通过；真机录屏待补 |
 | B2 MCP：stdio、本地密钥、配对、凭证同步、x402 付款与状态 | 🚧 #7 第 2 步，40/40 测试通过；`pay` 已接 SDK witness、本地预验证、找零落盘和 `@x402/fetch`；真实 anvil E2E 与 `treasury`/`delegate` 待后续 |
 | B4 加密信箱：消息箱与独立备份槽、SQLite/Upstash、限流、serverless 入口 | 🚧 #9，审查修复与服务端测试通过；固定线上地址和真实 Upstash 待验收 |
 | A3 核心合约：Gate、Group、Registry、Revocations | ✅ #3，真实证明 30/30；gas 中位数：register 346,668、issue 98,604、deposit 360,961、transferBudget 479,017、execute D2 549,916、revoke 254,361 |

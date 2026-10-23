@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WalletBill } from "./bill";
-import { DEFAULT_ALERT_RULES, evaluateBillAlerts, freshAlerts, normalizeAlertRules } from "./alert-rules";
+import { DEFAULT_ALERT_RULES, UNREPORTED_GRACE_MS, evaluateBillAlerts, freshAlerts, normalizeAlertRules } from "./alert-rules";
 
 function bill(overrides: Partial<WalletBill> & Pick<WalletBill, "budgetNf">): WalletBill {
   return {
@@ -23,7 +23,7 @@ describe("bill alert rules", () => {
     const now = 1_700_001_000_000;
     const bills = Array.from({ length: 6 }, (_, index) => bill({
       budgetNf: BigInt(index + 1),
-      chainTimeMs: now - index * 1_000,
+      chainTimeMs: index === 5 ? now - UNREPORTED_GRACE_MS : now - index * 1_000,
       reported: index !== 5,
       amount: index === 0 ? 25_000_000n : 1_000_000n,
     }));
@@ -37,6 +37,15 @@ describe("bill alert rules", () => {
     const exact = Array.from({ length: 5 }, (_, index) => bill({ budgetNf: BigInt(index + 1), chainTimeMs: now, amount: 20_000_000n }));
     expect(evaluateBillAlerts(exact, DEFAULT_ALERT_RULES, now)).toEqual([]);
     expect(evaluateBillAlerts([bill({ budgetNf: 9n, reported: false })], { ...DEFAULT_ALERT_RULES, unreported: false })).toEqual([]);
+  });
+
+  it("waits for the receipt grace window before flagging an unreported payment", () => {
+    const now = 1_700_001_000_000;
+    const recent = bill({ budgetNf: 8n, reported: false, chainTimeMs: now - UNREPORTED_GRACE_MS + 1 });
+    const overdue = bill({ budgetNf: 9n, reported: false, chainTimeMs: now - UNREPORTED_GRACE_MS });
+    expect(evaluateBillAlerts([recent], DEFAULT_ALERT_RULES, now)).toEqual([]);
+    expect(evaluateBillAlerts([overdue], DEFAULT_ALERT_RULES, now).map((alert) => alert.kind)).toEqual(["unreported"]);
+    expect(evaluateBillAlerts([{ ...overdue, reported: true }], DEFAULT_ALERT_RULES, now)).toEqual([]);
   });
 
   it("normalizes persisted settings and deduplicates delivered alerts", () => {

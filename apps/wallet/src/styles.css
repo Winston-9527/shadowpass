@@ -155,7 +155,9 @@ code { font-family: "SFMono-Regular", "Cascadia Code", monospace; font-size: 12p
 .console-error { margin-bottom: 0; }
 .page-alert { min-height: 60px; margin-top: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; border: 1px solid #e5b35c; border-left: 4px solid #a86c14; border-radius: 8px; background: #fff7e7; color: #653f0b; }
 .page-alert-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 7px; background: #f8e3b7; flex: 0 0 auto; }
-.page-alert > div:nth-child(2) { display: grid; gap: 3px; min-width: 0; flex: 1; }
+.page-alert-copy { display: grid; gap: 5px; min-width: 0; flex: 1; }
+.page-alert-copy ul { margin: 0; padding: 0; display: grid; gap: 4px; list-style: none; }
+.page-alert-copy li { display: flex; gap: 6px; }
 .page-alert strong { font-size: 14px; }
 .page-alert span { color: #805c28; font-size: 13px; line-height: 1.4; }
 .page-alert .button { white-space: nowrap; }

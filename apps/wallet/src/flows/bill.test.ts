@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import "../sdk";
 import {
   ChainState,
@@ -11,7 +11,8 @@ import {
   type ReceiptMessage,
 } from "@shadowpass/sdk";
 import { serializeCert } from "./cert";
-import { mergeWalletBills, receiptsFromMailbox } from "./bill";
+import { loadBillSnapshot, mergeWalletBills, receiptsFromMailbox, type MailboxReader } from "./bill";
+import type { WalletGateway } from "./chain";
 import { emptyLedger, type CardRecord } from "./types";
 
 const TX = `0x${"12".repeat(32)}` as const;
@@ -50,7 +51,7 @@ async function fixture() {
     { eventName: "Executed", args: { budgetNf: 77n, target: `0x${"34".repeat(20)}`, method: "0x12345678", amount: 21_000_000n }, blockNumber: 4n, transactionHash: TX, logIndex: 0 },
     { eventName: "OwnerCiphertext", args: { budgetNf: 77n, ct: flatten(encryption) }, blockNumber: 4n, transactionHash: TX, logIndex: 1 },
   ];
-  return { owner, agent, other, ledger, logs, card };
+  return { owner, agent, other, c0, c1, ledger, logs, card };
 }
 
 describe("wallet bill reconciliation", () => {
@@ -78,8 +79,53 @@ describe("wallet bill reconciliation", () => {
     const { other, ledger, logs } = await fixture();
     const entries = scanBill(new ChainState(), logs, other.view.vsk);
     const bills = mergeWalletBills({ entries, ledger, receipts: [] });
-    expect(bills).toHaveLength(1);
-    expect(bills[0]?.chain).toBeNull();
-    expect(bills[0]?.cardId).toBeUndefined();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.chain).toBeNull();
+    expect(bills).toHaveLength(0);
+  });
+
+  it("attributes a delegated payment through validated delegated messages", async () => {
+    const { owner, ledger, c1, card } = await fixture();
+    const child = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 171));
+    const c2 = issue(c1, child.sign, 1n, 2_000_050_000n);
+    const encryption = encryptChain(
+      [owner.sign, owner.steward, { Ax: BigInt(card.agentPk.x), Ay: BigInt(card.agentPk.y) }, child.sign]
+        .map((identity) => ({ x: identity.Ax, y: identity.Ay })),
+      owner.view.vpk,
+    );
+    const logs = [
+      { eventName: "Executed", args: { budgetNf: 88n, target: `0x${"34".repeat(20)}`, method: "0x12345678", amount: 2_000_000n }, blockNumber: 5n, transactionHash: `0x${"56".repeat(32)}`, logIndex: 0 },
+      { eventName: "OwnerCiphertext", args: { budgetNf: 88n, ct: flatten(encryption) }, blockNumber: 5n, transactionHash: `0x${"56".repeat(32)}`, logIndex: 1 },
+    ];
+    const entries = scanBill(new ChainState(), logs, owner.view.vsk);
+    const delegations = [{
+      type: "delegated" as const,
+      parent: c1.hash.toString(),
+      cert: serializeCert(c2),
+      mailboxId: 9,
+    }];
+    const [payment] = mergeWalletBills({ entries, ledger, receipts: [], delegations });
+    expect(payment).toMatchObject({ cardId: card.id, agentName: "buyer", amount: 2_000_000n });
+  });
+
+  it("advances the mailbox cursor and reuses receipts across polls", async () => {
+    const { owner, ledger } = await fixture();
+    const firstReceipt = { type: "receipt", budgetNf: "1", tx: TX, resource: "one", amount: "1" };
+    const secondReceipt = { type: "receipt", budgetNf: "2", tx: TX, resource: "two", amount: "2" };
+    const pollAll = vi.fn(async <T,>(_key: unknown, after = 0): Promise<MailboxEntry<T>[]> => (after === 0
+      ? [{ id: 3, ct: "x", decoded: true, value: firstReceipt }]
+      : [{ id: 7, ct: "x", decoded: true, value: secondReceipt }]) as MailboxEntry<T>[]);
+    const gateway = {
+      poll: async () => ({ state: new ChainState(), logs: [] }),
+      blockTimestamps: async () => new Map(),
+    } as unknown as WalletGateway;
+    const options = { ledger, gateway, mailbox: { pollAll } as unknown as MailboxReader, bundle: { view: { vsk: owner.view.vsk }, box: {} } };
+
+    const first = await loadBillSnapshot(options);
+    const second = await loadBillSnapshot({ ...options, mailboxCursor: first.mailboxCursor, receipts: first.receipts });
+    expect(pollAll.mock.calls.map((call) => call[1])).toEqual([0, 3]);
+    expect(first.mailboxCursor).toBe(3);
+    expect(second.mailboxCursor).toBe(7);
+    expect(second.receipts.map((receipt) => receipt.budgetNf)).toEqual(["1", "2"]);
   });
 });

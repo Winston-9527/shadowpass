@@ -136,7 +136,7 @@ export function Bill({ bills, rules, alerts, onChangeRules }: BillProps) {
             </label>
             <label className="field"><span>Threshold (USDC)</span><input inputMode="decimal" defaultValue={threshold} key={threshold} onBlur={(event) => updateThreshold(event.target.value)} /></label>
           </div>
-          <div className="rule-privacy"><CheckCheck size={16} /><span>Receipts are matched against the chain before they count as reported.</span></div>
+          <div className="rule-privacy"><CheckCheck size={16} /><span>Receipts are unauthenticated reports. They only suppress an unreported marker after matching the on-chain transaction; the chain remains authoritative.</span></div>
         </section>
       </div>
     </div>

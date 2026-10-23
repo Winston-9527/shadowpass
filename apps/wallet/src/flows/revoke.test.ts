@@ -28,16 +28,25 @@ class Proofs implements ProofService {
 class Gateway implements WalletGateway {
   readonly state = new ChainState();
   readonly relays: Array<{ action: string; args: Record<string, unknown> }> = [];
+  conflictOnce = false;
+  private conflicted = false;
 
   async sync() { return this.state; }
+  async poll() { return { state: this.state, logs: [] }; }
   async logs() { return []; }
   async blockTimestamps() { return new Map<string, number>(); }
   async registryDomain() { return 7n; }
+  async registryLeaf() { return 0n; }
   async revocationWindow() { return 10n; }
   async externalDeposit(): Promise<never> { throw new Error("not used"); }
   async relay(action: Parameters<WalletGateway["relay"]>[0], args: Record<string, unknown>): Promise<RelayResult> {
     this.relays.push({ action, args });
     if (action !== "revoke") throw new Error(`unexpected action ${action}`);
+    if (this.conflictOnce && !this.conflicted) {
+      this.conflicted = true;
+      this.state.revoked.insert(999n);
+      throw new Error("simulation_failed:StaleRevokedRoot");
+    }
     this.state.revoked.insert(BigInt(String(args.entry)));
     return { transaction: `0x${"ab".repeat(32)}`, blockNumber: "1", logs: [] };
   }
@@ -77,5 +86,17 @@ describe("wallet revocation flow", () => {
     expect(result.entry).toBe(BigInt(ledger.root!.hash));
     expect(proofs.calls[0]?.input).toMatchObject({ entry: ledger.root!.hash, who: "0", hop: "0" });
     expect(proofs.calls[0]?.input.own_w).toEqual([bundle.view.w.x.toString(), bundle.view.w.y.toString()]);
+  });
+
+  it("regenerates the proof when another revocation changes the root first", async () => {
+    const { bundle, ledger, card } = await fixture();
+    const gateway = new Gateway();
+    gateway.conflictOnce = true;
+    const proofs = new Proofs();
+    const result = await revokeAgent({ ledger, bundle, gateway, proofs, card });
+    expect(gateway.relays).toHaveLength(2);
+    expect(proofs.calls).toHaveLength(2);
+    expect(proofs.calls[0]?.input.old_root).not.toBe(proofs.calls[1]?.input.old_root);
+    expect(gateway.state.revoked.has(truncateKey(result.entry))).toBe(true);
   });
 });

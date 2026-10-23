@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BillAlert } from "../flows/alert-rules";
 import { freshAlerts } from "../flows/alert-rules";
+import { getWalletState, saveWalletState } from "../keystore/db";
 
 type AudioContextConstructor = new () => AudioContext;
 
@@ -33,18 +34,45 @@ async function playAlertTone(): Promise<void> {
   }
 }
 
-export function useBillAlerts(alerts: readonly BillAlert[]) {
+function alertHistory(value: unknown): string[] {
+  if (!value || typeof value !== "object") return [];
+  const ids = (value as { ids?: unknown }).ids;
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+}
+
+export function useBillAlerts(alerts: readonly BillAlert[], storageKey?: string) {
   const seen = useRef(new Set<string>());
   const [active, setActive] = useState<BillAlert[]>([]);
+  const [hydrated, setHydrated] = useState(false);
   const flashKey = active.map((alert) => alert.id).join("|");
 
   useEffect(() => {
+    let current = true;
+    seen.current = new Set();
+    setActive([]);
+    setHydrated(false);
+    void (async () => {
+      const stored = storageKey ? await getWalletState<unknown>(storageKey).catch(() => undefined) : undefined;
+      if (!current) return;
+      seen.current = new Set(alertHistory(stored));
+      setHydrated(true);
+    })();
+    return () => { current = false; };
+  }, [storageKey]);
+
+  useEffect(() => {
+    const currentIds = new Set(alerts.map((alert) => alert.id));
+    setActive((previous) => previous.filter((alert) => currentIds.has(alert.id)));
+    if (!hydrated) return;
     const fresh = freshAlerts(seen.current, alerts);
     if (fresh.length === 0) return;
     for (const alert of fresh) seen.current.add(alert.id);
     setActive(fresh);
+    if (storageKey) {
+      void saveWalletState(storageKey, { ids: [...seen.current].slice(-500) }).catch(() => undefined);
+    }
     void playAlertTone().catch(() => undefined);
-  }, [alerts]);
+  }, [alerts, hydrated, storageKey]);
 
   useEffect(() => {
     if (!flashKey || typeof document === "undefined") return;

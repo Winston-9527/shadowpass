@@ -51,6 +51,10 @@ class FakeGateway implements WalletGateway {
     return this.state;
   }
 
+  async poll(): Promise<{ state: ChainState; logs: unknown[] }> {
+    return { state: this.state, logs: this.emittedLogs };
+  }
+
   async logs(): Promise<unknown[]> {
     return this.emittedLogs;
   }

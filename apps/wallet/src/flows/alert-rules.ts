@@ -22,6 +22,8 @@ export interface BillAlert {
   budgetNfs: string[];
 }
 
+export const UNREPORTED_GRACE_MS = 30_000;
+
 export const DEFAULT_ALERT_RULES: AlertRules = {
   unreported: true,
   burst: { enabled: true, count: 5, windowMinutes: 5 },
@@ -73,6 +75,7 @@ export function evaluateBillAlerts(
   if (rules.unreported) {
     for (const bill of actionable) {
       if (bill.reported) continue;
+      if (nowMs - bill.chainTimeMs < UNREPORTED_GRACE_MS) continue;
       alerts.push({
         id: `unreported:${bill.budgetNf.toString()}`,
         kind: "unreported",

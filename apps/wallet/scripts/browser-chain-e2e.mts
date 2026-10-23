@@ -91,6 +91,27 @@ async function readLedger(page: import("playwright").Page): Promise<{ cards: Arr
   });
 }
 
+async function issueDiagnostics(page: import("playwright").Page): Promise<unknown> {
+  return page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("shadowpass-wallet", 2);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const rows = await new Promise<any[]>((resolve, reject) => {
+      const request = database.transaction("wallet-state", "readonly").objectStore("wallet-state").getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const ledger = rows.find((row) => row.id.startsWith("ledger:"))?.value;
+    return {
+      budgetAvailable: document.querySelector(".budget-source")?.textContent ?? "",
+      error: document.querySelector(".console-error")?.textContent ?? "",
+      ledger: ledger ? { root: ledger.root?.hash ?? null, notes: ledger.notes?.length ?? 0, cards: ledger.cards?.length ?? 0 } : null,
+    };
+  });
+}
+
 try {
   await Promise.all([
     waitForRpc(rpcUrl),
@@ -185,7 +206,13 @@ try {
     await secondPage.getByTestId("card-budget").fill("50");
     await secondPage.getByLabel("Expires").selectOption("1");
     const treasuryStarted = Date.now();
-    await secondPage.getByTestId("issue-card").click();
+    try {
+      await secondPage.getByTestId("issue-card").click();
+    } catch (error) {
+      await secondPage.screenshot({ path: path.join(outputDir, "wallet-browser-chain-failure.png"), fullPage: true });
+      process.stderr.write(`[browser treasury issue] ${JSON.stringify(await issueDiagnostics(secondPage))}\n`);
+      throw error;
+    }
     const treasuryMs = await waitForIssue(secondPage, treasuryStarted);
 
     await secondPage.getByRole("button", { name: "Authorization", exact: true }).click();
@@ -244,7 +271,7 @@ try {
     await registerActionState(gateway, malicious);
     const alertStarted = Date.now();
     const maliciousTx = await submitAction(client, rpcUrl, deployment, malicious);
-    await page.getByTestId("bill-alert").waitFor({ timeout: 30_000 });
+    await page.getByTestId("bill-alert").waitFor({ timeout: 45_000 });
     const alertText = await page.getByTestId("bill-alert").textContent();
     assert.match(alertText ?? "", /Unreported spend/);
     await page.waitForFunction(() => document.title.includes("ShadowPass:"));
