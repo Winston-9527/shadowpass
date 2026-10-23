@@ -35,10 +35,6 @@ type PrfExtensionOutput = {
   results?: { first?: ArrayBuffer };
 };
 
-type AuthenticatorResponseWithPrf = AuthenticatorResponse & {
-  getClientExtensionResults?: () => { prf?: PrfExtensionOutput };
-};
-
 export function hasPlatformPasskeySupport(): boolean {
   return typeof window !== "undefined"
     && typeof PublicKeyCredential !== "undefined"
@@ -56,15 +52,13 @@ export async function isPlatformAuthenticatorAvailable(): Promise<boolean> {
 }
 
 function prfFromCredential(credential: PublicKeyCredential): Uint8Array | null {
-  const response = credential.response as AuthenticatorResponseWithPrf;
-  const prf = response.getClientExtensionResults?.().prf;
+  const prf = (credential.getClientExtensionResults() as { prf?: PrfExtensionOutput }).prf;
   const first = prf?.results?.first;
   return first ? new Uint8Array(first) : null;
 }
 
 function prfEnabled(credential: PublicKeyCredential): boolean {
-  const response = credential.response as AuthenticatorResponseWithPrf;
-  return response.getClientExtensionResults?.().prf?.enabled === true;
+  return (credential.getClientExtensionResults() as { prf?: PrfExtensionOutput }).prf?.enabled === true;
 }
 
 function creationOptions(label: string, userHandle: Uint8Array, excludeCredentialIds: string[]): PublicKeyCredentialCreationOptions {

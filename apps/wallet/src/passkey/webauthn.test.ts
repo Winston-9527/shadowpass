@@ -6,17 +6,22 @@ class MockPublicKeyCredential {
   readonly id = "credential-id";
   readonly rawId = new Uint8Array(16).fill(1).buffer;
   readonly type = "public-key";
+  readonly getClientExtensionResults: () => { prf: { enabled: boolean; results?: { first: ArrayBuffer } } };
+  readonly response: { getClientExtensionResults?: () => never };
 
-  constructor(private readonly resultEnabled: boolean, private readonly resultFirst: ArrayBuffer | undefined) {}
-
-  readonly response = {
-    getClientExtensionResults: () => ({
+  constructor(
+    private readonly resultEnabled: boolean,
+    private readonly resultFirst: ArrayBuffer | undefined,
+    private readonly responseTrap: (() => never) | undefined = undefined,
+  ) {
+    this.getClientExtensionResults = () => ({
       prf: {
         enabled: this.resultEnabled,
-        results: this.resultFirst ? { first: this.resultFirst } : undefined,
+        ...(this.resultFirst ? { results: { first: this.resultFirst } } : {}),
       },
-    }),
-  };
+    });
+    this.response = this.responseTrap ? { getClientExtensionResults: this.responseTrap } : {};
+  }
 }
 
 describe("WebAuthn PRF semantics", () => {
@@ -40,6 +45,14 @@ describe("WebAuthn PRF semantics", () => {
 
     await expect(registerPasskey("test")).rejects.toBeInstanceOf(PrfUnsupportedError);
     expect(get).not.toHaveBeenCalled();
+  });
+
+  it("never reads getClientExtensionResults from the authenticator response", async () => {
+    const responseTrap = vi.fn(() => { throw new Error("response getter must not be called"); });
+    create.mockResolvedValue(new MockPublicKeyCredential(false, undefined, responseTrap));
+
+    await expect(registerPasskey("test")).rejects.toBeInstanceOf(PrfUnsupportedError);
+    expect(responseTrap).not.toHaveBeenCalled();
   });
 
   it("accepts authentication results that only contain prf.results.first", async () => {

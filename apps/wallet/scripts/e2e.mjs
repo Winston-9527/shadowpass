@@ -20,20 +20,21 @@ const server = await preview({
 });
 const url = server.resolvedUrls?.local[0] ?? "http://localhost:4173";
 
-function installMockCredential() {
+function installMockCredential(mode = "direct") {
   let counter = 0;
   const prfFor = (rawId) => new Uint8Array(32).fill(5 + new Uint8Array(rawId)[0]);
 
   class MockPublicKeyCredential {
-    constructor(rawId) {
+    constructor(rawId, assertion = false) {
       this.rawId = rawId;
       this.id = Array.from(new Uint8Array(rawId), (byte) => byte.toString(16).padStart(2, "0")).join("");
       this.type = "public-key";
-      this.response = {
-        // macOS iCloud Keychain returns enabled during registration but only returns
-        // the actual PRF result during the targeted follow-up get().
-        getClientExtensionResults: () => ({ prf: { enabled: true } }),
-      };
+      this.response = {};
+      this.getClientExtensionResults = () => ({
+        prf: assertion || mode === "direct"
+          ? { enabled: true, results: { first: prfFor(rawId).buffer } }
+          : { enabled: true },
+      });
     }
   }
 
@@ -45,15 +46,11 @@ function installMockCredential() {
   Object.defineProperty(navigator, "credentials", {
     configurable: true,
     value: {
-      create: async () => new MockPublicKeyCredential(new Uint8Array(16).fill(++counter).buffer),
+      create: async () => new MockPublicKeyCredential(new Uint8Array(16).fill(++counter).buffer, false),
       get: async (options) => {
         const requested = options?.publicKey?.allowCredentials?.[0]?.id;
         const rawId = requested instanceof ArrayBuffer ? requested : new Uint8Array(16).fill(1).buffer;
-        const credential = new MockPublicKeyCredential(rawId);
-        credential.response = {
-          getClientExtensionResults: () => ({ prf: { results: { first: prfFor(rawId).buffer } } }),
-        };
-        return credential;
+        return new MockPublicKeyCredential(rawId, true);
       },
     },
   });
@@ -71,7 +68,7 @@ async function waitForUnlocked(page) {
 const browser = await chromium.launch({ channel: "chrome" });
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 980 } });
-  await context.addInitScript(installMockCredential);
+  await context.addInitScript(installMockCredential, "direct");
   const page = await context.newPage();
   const response = await page.goto(url);
   const csp = response?.headers()["content-security-policy"] ?? "";
@@ -114,7 +111,7 @@ try {
   await context.close();
 
   const syncedContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await syncedContext.addInitScript(installMockCredential);
+  await syncedContext.addInitScript(installMockCredential, "direct");
   const syncedPage = await syncedContext.newPage();
   await syncedPage.goto(url);
   await syncedPage.getByRole("button", { name: "Use synced passkey" }).click();
@@ -123,7 +120,7 @@ try {
   await syncedContext.close();
 
   const recoveryContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  await recoveryContext.addInitScript(installMockCredential);
+  await recoveryContext.addInitScript(installMockCredential, "direct");
   const recoveryPage = await recoveryContext.newPage();
   await recoveryPage.goto(url);
   await recoveryPage.getByTestId("recovery-input").fill(recoveryCode);
@@ -149,9 +146,8 @@ try {
       rawId = new Uint8Array(16).fill(3).buffer;
       id = "no-prf";
       type = "public-key";
-      response = {
-        getClientExtensionResults: () => ({ prf: { enabled: false } }),
-      };
+      response = {};
+      getClientExtensionResults = () => ({ prf: { enabled: false } });
     }
     Object.defineProperty(window, "PublicKeyCredential", { configurable: true, value: NoPrfPublicKeyCredential });
     Object.defineProperty(navigator, "credentials", {
@@ -174,13 +170,21 @@ try {
   await noPrfPage.screenshot({ path: new URL("wallet-prf-unsupported.png", outputDir).pathname, fullPage: true });
   await noPrfContext.close();
 
+  const enabledOnlyContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  await enabledOnlyContext.addInitScript(installMockCredential, "enabled-only");
+  const enabledOnlyPage = await enabledOnlyContext.newPage();
+  await enabledOnlyPage.goto(url);
+  await enabledOnlyPage.getByTestId("create-wallet").click();
+  await enabledOnlyPage.getByRole("dialog").waitFor();
+  await enabledOnlyContext.close();
+
   console.log(JSON.stringify({
     ok: true,
     url,
     previewHeaders: { csp },
     mailbox: process.env.VITE_MAILBOX_URL,
     screenshots: ["wallet-recovery.png", "wallet-unlocked.png", "wallet-mobile.png", "wallet-prf-unavailable.png", "wallet-prf-unsupported.png"],
-    checks: ["production CSP + WebAssembly", "iCloud-style two-step PRF", "create", "passkey unlock", "second passkey with distinct PRF", "synced passkey slot", "recovery slot in new browser with pagination", "mobile overflow", "no WebAuthn", "authenticator without PRF"],
+    checks: ["production CSP + WebAssembly", "registration returns PRF directly", "enabled-only registration with targeted PRF login", "create", "passkey unlock", "second passkey with distinct PRF", "synced passkey slot", "recovery slot in new browser with pagination", "mobile overflow", "no WebAuthn", "authenticator without PRF"],
   }, null, 2));
 } finally {
   await browser.close();
