@@ -1,5 +1,5 @@
 import {
-  ChainState,
+  budgetNullifier,
   decodeBundle,
   encodeBundle,
   keyEntry,
@@ -12,6 +12,12 @@ import type { AgentStore } from "./store.js";
 import type { Capability, CredentialValidation } from "./types.js";
 
 const bundleObjectSchema = z.object({ v: z.literal(1), chain: z.array(z.unknown()).min(1) });
+const pairingSecretSchema = z.string().regex(/^[0-9a-f]{32}$/);
+
+export interface CredentialEnvelope {
+  bundle: CertificateBundle;
+  pair?: string;
+}
 
 function bundleNote(bundle: CertificateBundle): Note {
   return {
@@ -27,26 +33,57 @@ function bundleNote(bundle: CertificateBundle): Note {
   };
 }
 
-export function decodeCredentialValue(value: unknown): CertificateBundle {
+function decodeBundleObject(value: unknown): CertificateBundle {
+  return decodeBundle(encodeBundle(value as CertificateBundle));
+}
+
+function optionalPair(value: unknown): string | undefined {
+  return typeof value === "string" && pairingSecretSchema.safeParse(value).success ? value : undefined;
+}
+
+export function decodeCredentialValue(value: unknown): CredentialEnvelope {
   if (typeof value === "string") {
     try {
-      return decodeBundle(value);
-    } catch (error) {
+      return { bundle: decodeBundle(value) };
+    } catch (bundleError) {
       try {
-        return decodeBundle(encodeBundle(JSON.parse(value) as CertificateBundle));
+        return decodeCredentialValue(JSON.parse(value) as unknown);
       } catch {
-        throw error;
+        throw bundleError;
       }
     }
   }
-  if (value && typeof value === "object" && bundleObjectSchema.safeParse(value).success) {
-    return decodeBundle(encodeBundle(value as CertificateBundle));
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if ("bundle" in record) {
+      const inner = record.bundle;
+      const bundle = typeof inner === "string" ? decodeBundle(inner) : decodeBundleObject(inner);
+      return { bundle, pair: optionalPair(record.pair) };
+    }
+    if (bundleObjectSchema.safeParse(record).success) {
+      return { bundle: decodeBundleObject(record), pair: optionalPair(record.pair) };
+    }
   }
   throw new Error("mailbox entry is not a certificate bundle");
 }
 
+export function credentialCap(bundle: CertificateBundle): bigint {
+  const first = bundle.chain[0];
+  if (!first) return 0n;
+  return bundle.chain.slice(1).reduce((cap, cert) => cap & BigInt(cert.cap), BigInt(first.cap));
+}
+
+export function credentialExpiry(bundle: CertificateBundle): bigint {
+  const first = bundle.chain[0];
+  if (!first) return 0n;
+  return bundle.chain.slice(1).reduce((expiry, cert) => {
+    const candidate = BigInt(cert.expiry);
+    return candidate < expiry ? candidate : expiry;
+  }, BigInt(first.expiry));
+}
+
 export function capabilitiesOf(bundle: CertificateBundle): Capability[] {
-  const cap = BigInt(bundle.chain.at(-1)?.cap ?? "0");
+  const cap = credentialCap(bundle);
   const result: Capability[] = [];
   if ((cap & 1n) !== 0n) result.push("PAY");
   if ((cap & 2n) !== 0n) result.push("TREASURY");
@@ -57,7 +94,7 @@ export function validateCredentialBundle(
   bundle: CertificateBundle,
   options: {
     store: AgentStore;
-    state: ChainState | undefined;
+    state: ChainStateLike | undefined;
     deploymentName: string;
     chainId: number;
     nowSeconds?: bigint;
@@ -67,73 +104,88 @@ export function validateCredentialBundle(
   const { store, state } = options;
   const first = bundle.chain[0];
   const last = bundle.chain.at(-1);
-  if (!first || !last) return { valid: false, errors: ["certificate chain is empty"], capabilities: [], revoked: false, expiry: 0n, stateRegistered: false };
+  if (!first || !last) {
+    return { valid: false, errors: ["empty_chain"], capabilities: [], revoked: false, expiry: 0n, stateRegistered: false };
+  }
 
-  if (bundle.chainId !== options.chainId) errors.push(`chainId mismatch: bundle=${bundle.chainId}, deployment=${options.chainId}`);
-  if (bundle.deployment !== options.deploymentName) errors.push(`deployment mismatch: bundle=${bundle.deployment}, local=${options.deploymentName}`);
-  if (first.hop !== 0) errors.push("certificate chain must start at hop 0");
+  if (bundle.chainId !== options.chainId) errors.push("chain_id_mismatch");
+  if (bundle.deployment !== options.deploymentName) errors.push("deployment_mismatch");
+  if (first.hop !== 0) errors.push("chain_hop_mismatch");
+  if (bundle.chain.length > 4) errors.push("chain_too_long");
   for (let index = 0; index < bundle.chain.length; index += 1) {
     const cert = bundle.chain[index]!;
-    if (cert.hop !== index) errors.push(`certificate hop mismatch at ${index}`);
+    if (cert.hop !== index) errors.push("chain_hop_mismatch");
     if (index > 0) {
       const previous = bundle.chain[index - 1]!;
       if (previous.holder.x !== cert.issuer.x || previous.holder.y !== cert.issuer.y) {
-        errors.push(`certificate chain is not contiguous at hop ${index}`);
+        errors.push("chain_discontinuous");
       }
     }
   }
   if (last.holder.x !== store.holder.Ax.toString() || last.holder.y !== store.holder.Ay.toString()) {
-    errors.push("bundle terminal holder is not this agent");
+    errors.push("terminal_holder_mismatch");
   }
 
   const note = bundleNote(bundle);
   if (note.own[0] !== store.holder.Ax || note.own[1] !== store.holder.Ay) {
-    errors.push("note owner is not this agent");
+    errors.push("note_owner_mismatch");
   }
   for (let index = 0; index < 4; index += 1) {
     const expected = index < bundle.chain.length ? BigInt(bundle.chain[index]!.hash) : 0n;
-    if (note.lin[index] !== expected) errors.push(`note lineage mismatch at ${index}`);
+    if (note.lin[index] !== expected) errors.push("note_lineage_mismatch");
   }
 
   let revoked = false;
   if (!state) {
-    errors.push("chain state is unavailable");
+    errors.push("chain_state_unavailable");
   } else {
-    if (state.rootTree.indexOf(BigInt(first.hash)) < 0) errors.push("root certificate is not registered");
-    for (const cert of bundle.chain.slice(1)) {
-      if (state.issued.indexOf(BigInt(cert.hash)) < 0) errors.push(`certificate at hop ${cert.hop} is not issued`);
+    if (state.rootTree.indexOf(BigInt(first.hash)) < 0) errors.push("root_not_registered");
+    if (bundle.chain.slice(1).some((cert) => state.issued.indexOf(BigInt(cert.hash)) < 0)) {
+      errors.push("certificate_not_issued");
     }
     for (const cert of bundle.chain) {
-      const revokedEntry = truncateKey(BigInt(cert.hash));
-      if (state.revoked.has(revokedEntry)) {
+      if (state.revoked.has(truncateKey(BigInt(cert.hash)))) {
         revoked = true;
-        errors.push(`certificate at hop ${cert.hop} is revoked`);
+        errors.push("certificate_revoked");
       }
     }
     const holderKey = keyEntry({ Ax: store.holder.Ax, Ay: store.holder.Ay } as Identity);
     if (state.revoked.has(truncateKey(holderKey))) {
       revoked = true;
-      errors.push("agent holder key is revoked");
+      errors.push("holder_revoked");
     }
-    if (state.notes.indexOf(noteCm(note)) < 0) errors.push("note is not in the on-chain note tree");
+    if (state.notes.indexOf(noteCm(note)) < 0) errors.push("note_not_registered");
+    if (state.spentNullifiers.has(budgetNullifier(store.holder.sk, note).toString())) {
+      errors.push("note_spent");
+    }
   }
 
   const now = options.nowSeconds ?? BigInt(Math.floor(Date.now() / 1000));
-  if (now > BigInt(last.expiry)) errors.push("certificate chain is expired");
+  if (now > credentialExpiry(bundle)) errors.push("credential_expired");
   const stateRoot = state?.roots().state;
   const stateRegistered = state !== undefined && stateRoot !== undefined && state.registeredStateRoots.has(stateRoot.toString());
 
   return {
     valid: errors.length === 0,
-    errors,
+    errors: [...new Set(errors)],
     capabilities: capabilitiesOf(bundle),
     revoked,
-    expiry: BigInt(last.expiry),
+    expiry: credentialExpiry(bundle),
     stateRegistered,
   };
 }
 
+export interface ChainStateLike {
+  issued: { indexOf(value: bigint): number };
+  rootTree: { indexOf(value: bigint): number };
+  notes: { indexOf(value: bigint): number };
+  revoked: { has(value: bigint): boolean };
+  spentNullifiers: Set<string>;
+  registeredStateRoots: Set<string>;
+  roots(): { state: bigint };
+}
+
 export function capForBundle(bundle: CertificateBundle, capability: Capability): boolean {
-  const cap = BigInt(bundle.chain.at(-1)?.cap ?? "0");
+  const cap = credentialCap(bundle);
   return capability === "PAY" ? (cap & 1n) !== 0n : (cap & 2n) !== 0n;
 }

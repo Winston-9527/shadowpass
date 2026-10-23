@@ -6,6 +6,7 @@ import {
   createNote,
   deriveKeys,
   encodeBundle,
+  encodeNoteMemo,
   IndexedMerkleTree,
   issue,
   issueRoot,
@@ -40,15 +41,30 @@ export const deployment: Deployment = {
   mailbox: "http://localhost:3001",
 };
 
-export async function createFixture(options: { name?: string; cap?: bigint; expiry?: bigint; noteQ?: bigint } = {}) {
+export async function createFixture(options: {
+  name?: string;
+  ownerSeed?: Uint8Array;
+  cap?: bigint;
+  rootCap?: bigint;
+  agentCap?: bigint;
+  expiry?: bigint;
+  rootExpiry?: bigint;
+  agentExpiry?: bigint;
+  noteQ?: bigint;
+} = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "shadowpass-mcp-"));
   const store = await AgentStore.open({ name: options.name ?? "buyer", root, network: "anvil", deployment: "anvil" });
-  const owner = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 10));
+  const owner = await deriveKeys(options.ownerSeed ?? Uint8Array.from({ length: 32 }, (_, index) => index + 10));
   const cap = options.cap ?? 3n;
+  const rootCap = options.rootCap ?? cap;
+  const agentCap = options.agentCap ?? cap;
   const expiry = options.expiry ?? 2_000_000_000n;
-  const c0 = issueRoot(owner.sign, owner.steward, cap, expiry, owner.view.vpk, owner.view.w);
-  const c1 = issue(c0, store.holder, cap, expiry - 1_000n);
+  const rootExpiry = options.rootExpiry ?? expiry;
+  const agentExpiry = options.agentExpiry ?? expiry - 1_000n;
+  const c0 = issueRoot(owner.sign, owner.steward, rootCap, rootExpiry, owner.view.vpk, owner.view.w);
+  const c1 = issue(c0, store.holder, agentCap, agentExpiry);
   const note: Note = createNote(store.holder, options.noteQ ?? 80n, [c0.hash, c1.hash]);
+  const memo = await encodeNoteMemo(note, store.boxPublicKey);
   const bundle: CertificateBundle = {
     v: 1,
     chainId: deployment.chainId,
@@ -58,8 +74,8 @@ export async function createFixture(options: { name?: string; cap?: bigint; expi
         hop: 0,
         issuer: { x: owner.sign.Ax.toString(), y: owner.sign.Ay.toString() },
         holder: { x: owner.steward.Ax.toString(), y: owner.steward.Ay.toString() },
-        cap: cap.toString(),
-        expiry: expiry.toString(),
+        cap: rootCap.toString(),
+        expiry: rootExpiry.toString(),
         sig: { S: c0.sig.S.toString(), R8x: c0.sig.R8x.toString(), R8y: c0.sig.R8y.toString() },
         vpk: { x: owner.view.vpk.x.toString(), y: owner.view.vpk.y.toString() },
         ownW: { x: owner.view.w.x.toString(), y: owner.view.w.y.toString() },
@@ -95,11 +111,12 @@ export async function createFixture(options: { name?: string; cap?: bigint; expi
     { eventName: "Registered", args: { nf: 1n, leaf0: c0.hash, index: 0, root: roots.root }, blockNumber: 1n, logIndex: 0 },
     { eventName: "Issued", args: { certHash: c1.hash, index: 0, root: issued.root }, blockNumber: 1n, logIndex: 1 },
     { eventName: "NoteInserted", args: { cm: noteCm(note), index: 0, root: notes.root }, blockNumber: 1n, logIndex: 2 },
+    { eventName: "NoteMemo", args: { cm: noteCm(note), memo: `0x${Buffer.from(memo).toString("hex")}` }, blockNumber: 1n, logIndex: 3 },
     {
       eventName: "StateRegistered",
       args: { issued: issued.root, revoked: revokedRoot, root: roots.root, stateRoot: stateRoot(issued.root, revokedRoot, roots.root) },
       blockNumber: 1n,
-      logIndex: 3,
+      logIndex: 4,
     },
   ];
   const state = ChainState.fromLogs(deployment, logs);
@@ -108,15 +125,72 @@ export async function createFixture(options: { name?: string; cap?: bigint; expi
     store,
     owner,
     cap,
+    rootCap,
+    agentCap,
     expiry,
+    rootExpiry,
+    agentExpiry,
     c0,
     c1,
     note,
     bundle,
+    memo,
     encodedBundle: encodeBundle(bundle),
     logs,
     state,
   };
+}
+
+export async function createForeignBundle(
+  store: AgentStore,
+  options: {
+    ownerSeed?: Uint8Array;
+    cap?: bigint;
+    expiry?: bigint;
+    noteQ?: bigint;
+  } = {},
+) {
+  const owner = await deriveKeys(options.ownerSeed ?? Uint8Array.from({ length: 32 }, (_, index) => index + 80));
+  const cap = options.cap ?? 3n;
+  const expiry = options.expiry ?? 2_000_000_000n;
+  const root = issueRoot(owner.sign, owner.steward, cap, expiry, owner.view.vpk, owner.view.w);
+  const child = issue(root, store.holder, cap, expiry - 1_000n);
+  const note = createNote(store.holder, options.noteQ ?? 10n, [root.hash, child.hash]);
+  const bundle: CertificateBundle = {
+    v: 1,
+    chainId: deployment.chainId,
+    deployment: "anvil",
+    chain: [
+      {
+        hop: 0,
+        issuer: { x: owner.sign.Ax.toString(), y: owner.sign.Ay.toString() },
+        holder: { x: owner.steward.Ax.toString(), y: owner.steward.Ay.toString() },
+        cap: cap.toString(),
+        expiry: expiry.toString(),
+        sig: { S: root.sig.S.toString(), R8x: root.sig.R8x.toString(), R8y: root.sig.R8y.toString() },
+        vpk: { x: owner.view.vpk.x.toString(), y: owner.view.vpk.y.toString() },
+        ownW: { x: owner.view.w.x.toString(), y: owner.view.w.y.toString() },
+        hash: root.hash.toString(),
+      },
+      {
+        hop: 1,
+        issuer: { x: child.issuer.Ax.toString(), y: child.issuer.Ay.toString() },
+        holder: { x: child.holder.Ax.toString(), y: child.holder.Ay.toString() },
+        cap: cap.toString(),
+        expiry: (expiry - 1_000n).toString(),
+        sig: { S: child.sig.S.toString(), R8x: child.sig.R8x.toString(), R8y: child.sig.R8y.toString() },
+        hash: child.hash.toString(),
+      },
+    ],
+    note: {
+      own: [note.own[0].toString(), note.own[1].toString()],
+      q: note.q.toString(),
+      lin: note.lin.map(String) as CertificateBundle["note"]["lin"],
+      rho: note.rho.toString(),
+    },
+    owner: { box: Buffer.from(owner.box.publicKey).toString("hex") },
+  };
+  return { owner, root, child, note, bundle, encodedBundle: encodeBundle(bundle) };
 }
 
 export function revokedState(fixture: Awaited<ReturnType<typeof createFixture>>): ChainState {

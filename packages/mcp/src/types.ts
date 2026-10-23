@@ -11,6 +11,9 @@ export interface AgentConfig {
   holderPk: { x: string; y: string };
   boxPk: string;
   ownerBoxPk?: string;
+  pinnedRootHash?: string;
+  pairingHash?: string;
+  acceptedCredentials?: string[];
   mailboxCursor: number;
   lastCredentialError?: string;
 }
@@ -19,6 +22,7 @@ export interface AgentSecrets {
   v: 1;
   holderPrv: string;
   boxSk: string;
+  pair?: string;
 }
 
 export interface StoredReceipt {

@@ -13,6 +13,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import qrcode from "qrcode-terminal";
 import { z } from "zod";
 import { CredentialInbox } from "./inbox.js";
+import { reconcileNotes } from "./notes.js";
 import { buildPairing } from "./pairing.js";
 import { AgentStore } from "./store.js";
 import {
@@ -37,6 +38,8 @@ export interface RuntimeOptions {
   malicious?: boolean;
   maxPayment?: bigint;
   nowSeconds?: bigint;
+  rpcUrl?: string;
+  refreshState?: () => Promise<ChainState>;
 }
 
 export interface McpRuntime {
@@ -48,6 +51,9 @@ export interface McpRuntime {
   malicious: boolean;
   maxPayment: bigint;
   nowSeconds?: bigint;
+  rpcUrl?: string;
+  refreshState?: () => Promise<ChainState>;
+  refreshPromise?: Promise<void>;
   pairing: ReturnType<typeof buildPairing>;
   context: McpToolContext;
 }
@@ -86,6 +92,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<McpRuntime
   const services = options.services ?? {};
   const maxPayment = options.maxPayment ?? asBigInt(process.env.SHADOWPASS_MAX_PAYMENT ?? "10000000", "SHADOWPASS_MAX_PAYMENT");
   const malicious = options.malicious ?? false;
+  const rpcUrl = options.rpcUrl ?? process.env.SHADOWPASS_RPC_URL ?? process.env.ANVIL_RPC_URL;
   const context: McpToolContext = {
     store,
     state: options.state,
@@ -97,7 +104,20 @@ export async function createRuntime(options: RuntimeOptions): Promise<McpRuntime
     maxPayment,
     nowSeconds: options.nowSeconds,
   };
-  return { store, deployment, state: options.state, mailbox, services, malicious, maxPayment, nowSeconds: options.nowSeconds, pairing: buildPairing(store), context };
+  return {
+    store,
+    deployment,
+    state: options.state,
+    mailbox,
+    services,
+    malicious,
+    maxPayment,
+    nowSeconds: options.nowSeconds,
+    rpcUrl,
+    refreshState: options.refreshState,
+    pairing: buildPairing(store),
+    context,
+  };
 }
 
 async function syncState(deployment: Deployment, rpcUrl: string): Promise<ChainState> {
@@ -109,36 +129,59 @@ async function syncState(deployment: Deployment, rpcUrl: string): Promise<ChainS
 }
 
 async function syncInbox(runtime: McpRuntime): Promise<void> {
-  if (!runtime.mailbox || !runtime.deployment) return;
+  if (!runtime.mailbox || !runtime.deployment || !runtime.context.state) return;
   try {
     const result = await new CredentialInbox({
       mailbox: runtime.mailbox,
       store: runtime.store,
-      state: runtime.state,
+      state: runtime.context.state,
       deploymentName: runtime.store.deployment,
       chainId: runtime.deployment.chainId,
     }).sync();
     if (result.accepted || result.rejected) {
       process.stderr.write(`[shadowpass] mailbox sync accepted=${result.accepted} rejected=${result.rejected}\n`);
     }
-  } catch (error) {
-    process.stderr.write(`[shadowpass] mailbox sync skipped: ${String(error)}\n`);
+  } catch {
+    process.stderr.write("[shadowpass] mailbox sync failed\n");
   }
 }
 
-async function refreshRuntime(runtime: McpRuntime, options: RunOptions): Promise<void> {
-  if (!runtime.state && runtime.deployment) {
-    const rpcUrl = options.rpcUrl ?? process.env.SHADOWPASS_RPC_URL ?? process.env.ANVIL_RPC_URL;
-    if (rpcUrl) {
-      try {
-        runtime.state = await syncState(runtime.deployment, rpcUrl);
-        runtime.context.state = runtime.state;
-      } catch (error) {
-        process.stderr.write(`[shadowpass] chain sync skipped: ${String(error)}\n`);
-      }
+async function refreshRuntimeOnce(runtime: McpRuntime): Promise<void> {
+  if (runtime.refreshState || (runtime.rpcUrl && runtime.deployment)) {
+    try {
+      runtime.state = runtime.refreshState
+        ? await runtime.refreshState()
+        : await syncState(runtime.deployment!, runtime.rpcUrl!);
+      runtime.context.state = runtime.state;
+    } catch {
+      runtime.state = undefined;
+      runtime.context.state = undefined;
+      process.stderr.write("[shadowpass] chain state unavailable\n");
+      return;
     }
   }
+  if (!runtime.context.state) return;
+
+  try {
+    const reconciliation = await reconcileNotes(runtime.store, runtime.context.state);
+    if (reconciliation.added) process.stderr.write(`[shadowpass] recovered notes=${reconciliation.added}\n`);
+    for (const warning of reconciliation.warnings) process.stderr.write(`[shadowpass] note warning=${warning}\n`);
+  } catch {
+    process.stderr.write("[shadowpass] note reconciliation failed\n");
+  }
   await syncInbox(runtime);
+}
+
+export function refreshRuntime(runtime: McpRuntime): Promise<void> {
+  if (runtime.refreshPromise) return runtime.refreshPromise;
+  runtime.refreshPromise = (async () => {
+    try {
+      await refreshRuntimeOnce(runtime);
+    } finally {
+      runtime.refreshPromise = undefined;
+    }
+  })();
+  return runtime.refreshPromise;
 }
 
 export function createMcpServer(runtime: McpRuntime): McpServer {
@@ -146,10 +189,11 @@ export function createMcpServer(runtime: McpRuntime): McpServer {
   const tool = (name: string, config: { description: string; inputSchema?: any }, handler: (args: any) => Promise<unknown>) => {
     server.registerTool(name, config, async (args: any) => {
       try {
+        await refreshRuntime(runtime);
         return jsonResult(await handler(args));
       } catch (error) {
         const code = error instanceof McpToolError ? error.code : "tool_error";
-        const message = error instanceof Error ? error.message : String(error);
+        const message = error instanceof McpToolError ? error.message : "tool_execution_failed";
         return { ...jsonResult({ error: code, message }), isError: true };
       }
     });
@@ -200,11 +244,13 @@ export function createMcpServer(runtime: McpRuntime): McpServer {
 export interface RunOptions extends RuntimeOptions {
   noQr?: boolean;
   printPairing?: boolean;
-  rpcUrl?: string;
+  newPairing?: boolean;
 }
 
 export async function runServer(options: RunOptions): Promise<void> {
   const runtime = await createRuntime(options);
+  if (options.newPairing) await runtime.store.rotatePairing();
+  runtime.pairing = buildPairing(runtime.store);
   process.stderr.write(`[shadowpass] agent=${runtime.store.name} dir=${runtime.store.paths.directory}\n`);
   process.stderr.write(`[shadowpass] pairing code: ${runtime.pairing.code}\n`);
   process.stderr.write(`[shadowpass] pairing url: ${runtime.pairing.url}\n`);
@@ -215,7 +261,7 @@ export async function runServer(options: RunOptions): Promise<void> {
 
   const server = createMcpServer(runtime);
   await server.connect(new StdioServerTransport());
-  void refreshRuntime(runtime, options);
+  void refreshRuntime(runtime);
 }
 
 function parseArgs(argv: string[]): RunOptions {
@@ -226,6 +272,7 @@ function parseArgs(argv: string[]): RunOptions {
   let malicious = false;
   let noQr = false;
   let printPairing = false;
+  let newPairing = false;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--name") name = argv[++index] ?? name;
@@ -235,14 +282,15 @@ function parseArgs(argv: string[]): RunOptions {
     else if (argument === "--malicious") malicious = true;
     else if (argument === "--no-qr") noQr = true;
     else if (argument === "--print-pairing") printPairing = true;
+    else if (argument === "--new-pairing") newPairing = true;
     else if (argument === "--help") {
-      process.stderr.write("usage: shadowpass-mcp [--name <name>] [--home <dir>] [--network <network>] [--rpc <url>] [--malicious] [--no-qr] [--print-pairing]\n");
+      process.stderr.write("usage: shadowpass-mcp [--name <name>] [--home <dir>] [--network <network>] [--rpc <url>] [--malicious] [--no-qr] [--print-pairing] [--new-pairing]\n");
       process.exit(0);
     } else {
       throw new Error(`unknown argument: ${argument}`);
     }
   }
-  return { name, root, network, rpcUrl, malicious, noQr, printPairing };
+  return { name, root, network, rpcUrl, malicious, noQr, printPairing, newPairing };
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {

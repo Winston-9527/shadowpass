@@ -1,13 +1,14 @@
 import { ChainState, MailboxClient } from "@shadowpass/sdk";
 import type { BoxKeyPair } from "@shadowpass/sdk";
 import { decodeCredentialValue, validateCredentialBundle } from "./credentials.js";
-import type { AgentStore } from "./store.js";
+import { AgentStore, CredentialStoreError } from "./store.js";
 
 export interface CredentialInboxResult {
   accepted: number;
   rejected: number;
   cursor: number;
   errors: string[];
+  deferred: boolean;
 }
 
 export interface CredentialInboxOptions {
@@ -28,11 +29,15 @@ export class CredentialInbox {
   }
 
   async sync(): Promise<CredentialInboxResult> {
+    const startingCursor = this.options.store.mailboxCursor;
+    if (!this.options.state) {
+      return { accepted: 0, rejected: 0, cursor: startingCursor, errors: [], deferred: true };
+    }
     const keyPair: BoxKeyPair = {
       privateKey: this.options.store.boxPrivateKey,
       publicKey: this.options.store.boxPublicKey,
     };
-    let cursor = this.options.store.mailboxCursor;
+    let cursor = startingCursor;
     let accepted = 0;
     let rejected = 0;
     const errors: string[] = [];
@@ -44,17 +49,28 @@ export class CredentialInbox {
         cursor = Math.max(cursor, entry.id);
         if (!entry.decoded) {
           rejected += 1;
-          if (entry.error) errors.push(`entry ${entry.id}: ${entry.error}`);
           continue;
         }
-        let bundle;
+
+        let envelope;
         try {
-          bundle = decodeCredentialValue(entry.value);
+          envelope = decodeCredentialValue(entry.value);
         } catch {
           // The mailbox is unauthenticated; unrelated messages are not credentials.
           continue;
         }
-        const validation = validateCredentialBundle(bundle, {
+
+        const ownership = this.options.store.credentialOwnership(envelope.bundle);
+        if (ownership === "untrusted") {
+          rejected += 1;
+          continue;
+        }
+        if (ownership === "unpaired" && !this.options.store.matchesPairingSecret(envelope.pair)) {
+          rejected += 1;
+          continue;
+        }
+
+        const validation = validateCredentialBundle(envelope.bundle, {
           store: this.options.store,
           state: this.options.state,
           deploymentName: this.options.deploymentName,
@@ -62,18 +78,27 @@ export class CredentialInbox {
         });
         if (!validation.valid) {
           rejected += 1;
-          const error = validation.errors.join("; ");
-          errors.push(`entry ${entry.id}: ${error}`);
-          await this.options.store.setCredentialError(error);
+          const code = validation.errors[0] ?? "invalid_credential";
+          errors.push(code);
+          await this.options.store.setCredentialError(code);
           continue;
         }
-        await this.options.store.saveBundle(bundle);
+
+        try {
+          await this.options.store.saveBundle(envelope.bundle, { pair: envelope.pair });
+        } catch (error) {
+          if (!(error instanceof CredentialStoreError)) throw error;
+          rejected += 1;
+          errors.push(error.code);
+          await this.options.store.setCredentialError(error.code);
+          continue;
+        }
         await this.options.store.setCredentialError(undefined);
         accepted += 1;
       }
       await this.options.store.setMailboxCursor(cursor);
       if (entries.length < 200) break;
     }
-    return { accepted, rejected, cursor, errors };
+    return { accepted, rejected, cursor, errors, deferred: false };
   }
 }

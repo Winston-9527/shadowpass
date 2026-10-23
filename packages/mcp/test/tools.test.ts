@@ -1,6 +1,6 @@
-import { MailboxClient } from "@shadowpass/sdk";
+import { ChainState, createNote, MailboxClient, MerkleTree, noteCm } from "@shadowpass/sdk";
 import { describe, expect, it, vi } from "vitest";
-import { listReceipts, pay, treasurySupply, walletStatus } from "../src/tools.js";
+import { delegate, listReceipts, pay, treasurySupply, walletStatus } from "../src/tools.js";
 import type { McpToolContext } from "../src/tools.js";
 import { createFixture, deployment } from "./fixtures.js";
 
@@ -24,7 +24,7 @@ function context(
 describe("MCP tools", () => {
   it("reports capabilities and remaining budget", async () => {
     const fixture = await createFixture();
-    await fixture.store.saveBundle(fixture.bundle);
+    await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
     const status = await walletStatus(context(fixture));
     expect(status.status).toBe("active");
     expect(status.capabilities).toEqual(["PAY", "TREASURY"]);
@@ -34,7 +34,7 @@ describe("MCP tools", () => {
 
   it("rejects a treasury call locally for a PAY-only agent without touching the backend", async () => {
     const fixture = await createFixture({ cap: 1n });
-    await fixture.store.saveBundle(fixture.bundle);
+    await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
     const supply = vi.fn();
     await expect(treasurySupply(context(fixture, { services: { treasury: { supply, status: async () => ({}) } } }), {
       vault: deployment.vault,
@@ -46,7 +46,7 @@ describe("MCP tools", () => {
 
   it("records a successful payment and reports the receipt to the owner", async () => {
     const fixture = await createFixture();
-    await fixture.store.saveBundle(fixture.bundle);
+    await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
     const bodies: unknown[] = [];
     const mailbox = new MailboxClient("http://mailbox.test", {
       fetch: async (_input, init) => {
@@ -71,7 +71,7 @@ describe("MCP tools", () => {
 
   it("keeps a local receipt but does not report it in malicious mode", async () => {
     const fixture = await createFixture();
-    await fixture.store.saveBundle(fixture.bundle);
+    await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
     const mailbox = new MailboxClient("http://mailbox.test", {
       fetch: async () => {
         throw new Error("mailbox must not be called");
@@ -94,9 +94,62 @@ describe("MCP tools", () => {
 
   it("fails closed when the payment backend is not configured", async () => {
     const fixture = await createFixture();
-    await fixture.store.saveBundle(fixture.bundle);
+    await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
     await expect(pay(context(fixture), { url: "https://merchant.test/report", maxAmount: 1n })).rejects.toMatchObject({
       code: "payment_backend_unavailable",
     });
+  });
+
+  it("counts only notes from the currently pinned credential lineage", async () => {
+    const fixture = await createFixture();
+    await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
+    const foreign = createNote(fixture.store.holder, 900n, [123n, 456n]);
+    await fixture.store.addNote({
+      own: [foreign.own[0].toString(), foreign.own[1].toString()],
+      q: foreign.q.toString(),
+      lin: foreign.lin.map(String) as typeof fixture.bundle.note.lin,
+      rho: foreign.rho.toString(),
+    });
+    const noteTree = new MerkleTree([noteCm(fixture.note), noteCm(foreign)]);
+    const state = ChainState.fromLogs(deployment, [
+      ...fixture.logs,
+      { eventName: "NoteInserted", args: { cm: noteCm(foreign), index: 1, root: noteTree.root }, blockNumber: 2n, logIndex: 0 },
+    ]);
+    const status = await walletStatus(context(fixture, { state }));
+    expect(status.remainingBudget).toBe("80");
+  });
+
+  it("rejects delegation capabilities and amounts beyond the parent before calling the backend", async () => {
+    const fixture = await createFixture({ rootCap: 1n, agentCap: 3n, noteQ: 10n });
+    await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
+    const delegateBackend = vi.fn();
+    const services = { delegate: { delegate: delegateBackend } };
+    await expect(delegate(context(fixture, { services }), {
+      name: "child",
+      cap: 2n,
+      expiry: 2_000n,
+      amount: 1n,
+    })).rejects.toMatchObject({ code: "capability_mismatch" });
+    await expect(delegate(context(fixture, { services }), {
+      name: "child",
+      cap: 1n,
+      expiry: 2_000n,
+      amount: 11n,
+    })).rejects.toMatchObject({ code: "insufficient_budget" });
+    expect(delegateBackend).not.toHaveBeenCalled();
+  });
+
+  it("passes a delegation request to the backend only after local checks", async () => {
+    const fixture = await createFixture({ noteQ: 10n });
+    await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
+    const result = { parent: fixture.c1.hash.toString(), cert: fixture.bundle.chain[1]!, pairingCode: "code" };
+    const delegateBackend = vi.fn(async () => result);
+    await expect(delegate(context(fixture, { services: { delegate: { delegate: delegateBackend } } }), {
+      name: "child",
+      cap: 1n,
+      expiry: 2_000n,
+      amount: 5n,
+    })).resolves.toEqual(result);
+    expect(delegateBackend).toHaveBeenCalledOnce();
   });
 });
