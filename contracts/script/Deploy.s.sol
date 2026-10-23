@@ -21,9 +21,11 @@ import {ShadowRevokeVerifier} from "../src/ShadowRevokeVerifier.sol";
 import {ShadowBudgetTransferVerifier} from "../src/ShadowBudgetTransferVerifier.sol";
 import {ShadowBudgetMintVerifier} from "../src/ShadowBudgetMintVerifier.sol";
 
-/// Deploys the complete ShadowPass contract set and writes deployments/<network>.json.
+/// Deploys the complete ShadowPass contract set to Anvil or Base Sepolia.
 /// Usage: forge script contracts/script/Deploy.s.sol:Deploy --rpc-url ... --broadcast
 contract Deploy is Script {
+    uint256 private constant ANVIL_CHAIN_ID = 31337;
+    uint256 private constant BASE_SEPOLIA_CHAIN_ID = 84532;
     bytes4 private constant PAY = bytes4(keccak256("shadowpass.PAY"));
     bytes4 private constant TREASURY_SUPPLY = bytes4(keccak256("shadowpass.TREASURY_SUPPLY"));
     uint64 private constant WINDOW = 10;
@@ -48,14 +50,23 @@ contract Deploy is Script {
         address mintVerifier;
     }
 
+    error UnsupportedChain(uint256 chainId);
+
     function run() external {
+        _validateChain(block.chainid);
+
         uint256 deployerPk = vm.envUint("DEPLOYER_PK");
         address deployer = vm.addr(deployerPk);
-        string memory network = vm.envOr("SHADOWPASS_NETWORK", string("anvil"));
         uint256 domain = vm.envOr("SHADOWPASS_DOMAIN", uint256(7));
 
         Deployment memory d = _deploy(deployerPk, deployer, domain);
-        _writeDeployment(network, d);
+        require(ShadowToken(d.token).gate() == d.gate, "token gate mismatch");
+    }
+
+    function _validateChain(uint256 chainId) internal pure {
+        if (chainId != ANVIL_CHAIN_ID && chainId != BASE_SEPOLIA_CHAIN_ID) {
+            revert UnsupportedChain(chainId);
+        }
     }
 
     function _deploy(uint256 deployerPk, address deployer, uint256 domain) internal returns (Deployment memory d) {
@@ -116,94 +127,5 @@ contract Deploy is Script {
             root = PoseidonT3.hash([root, zero]);
             zero = PoseidonT3.hash([zero, zero]);
         }
-    }
-
-    function _writeDeployment(string memory network, Deployment memory d) internal {
-        string memory facilitator = vm.envOr("SHADOWPASS_FACILITATOR", string(""));
-        string memory mailbox = vm.envOr("SHADOWPASS_MAILBOX", string(""));
-        string memory json =
-            string.concat(_coreJson(d), _assetJson(d), _verifierJson(d), _tailJson(facilitator, mailbox));
-        vm.writeFile(string.concat("../deployments/", network, ".json"), json);
-    }
-
-    function _coreJson(Deployment memory d) internal view returns (string memory) {
-        return string.concat(
-            "{\n",
-            '  "chainId": ',
-            vm.toString(block.chainid),
-            ",\n",
-            '  "gate": "',
-            vm.toString(d.gate),
-            '",\n',
-            '  "registry": "',
-            vm.toString(d.registry),
-            '",\n',
-            '  "revocations": "',
-            vm.toString(d.revocations),
-            '",\n',
-            '  "group": "',
-            vm.toString(d.group),
-            '",\n',
-            '  "payout": "',
-            vm.toString(d.payout),
-            '",\n'
-        );
-    }
-
-    function _assetJson(Deployment memory d) internal view returns (string memory) {
-        return string.concat(
-            '  "treasury": "',
-            vm.toString(d.treasury),
-            '",\n',
-            '  "vault": "',
-            vm.toString(d.vault),
-            '",\n',
-            '  "token": "',
-            vm.toString(d.token),
-            '",\n'
-        );
-    }
-
-    function _verifierJson(Deployment memory d) internal view returns (string memory) {
-        return string.concat(
-            '  "verifiers": {\n',
-            '    "d1": "',
-            vm.toString(d.d1),
-            '",\n',
-            '    "d2": "',
-            vm.toString(d.d2),
-            '",\n',
-            '    "d3": "',
-            vm.toString(d.d3),
-            '",\n',
-            '    "reg": "',
-            vm.toString(d.registerVerifier),
-            '",\n',
-            '    "revoke": "',
-            vm.toString(d.revokeVerifier),
-            '",\n',
-            '    "transfer": "',
-            vm.toString(d.transferVerifier),
-            '",\n',
-            '    "mint": "',
-            vm.toString(d.mintVerifier),
-            '"\n',
-            "  },\n"
-        );
-    }
-
-    function _tailJson(string memory facilitator, string memory mailbox) internal view returns (string memory) {
-        return string.concat(
-            '  "startBlock": ',
-            vm.toString(vm.getBlockNumber()),
-            ",\n",
-            '  "facilitator": "',
-            facilitator,
-            '",\n',
-            '  "mailbox": "',
-            mailbox,
-            '"\n',
-            "}\n"
-        );
     }
 }

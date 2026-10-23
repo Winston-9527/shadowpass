@@ -110,11 +110,17 @@ npm install
 npm run dev:chain
 ```
 
-脚本会启动 Anvil、部署全部合约、写入 `deployments/anvil.json`，并给三个 Anvil 测试账户各发 `1000 spUSD`。默认 Anvil 私钥只用于本地链；需要测试网部署时，把 `DEPLOYER_PK`、`BASE_SEPOLIA_RPC` 放进本地 `.env`，然后运行：
+脚本会启动 Anvil、部署全部合约、校验链上地址、从成功的广播产物写入 `deployments/anvil.json`，并给三个 Anvil 测试账户各发 `1000 spUSD`。`ANVIL_PORT` 同时决定启动端口和 RPC 地址；复用已有节点时会拒绝非 `31337` 的链。默认 Anvil 私钥只用于本地链。
+
+重复运行会部署一套新合约并覆盖 `deployments/anvil.json`，不是幂等操作；不带 `--broadcast` 的模拟不会写部署文件。
+
+需要测试网部署时，把 `DEPLOYER_PK`、`BASE_SEPOLIA_RPC` 放进本地 `.env`，然后运行：
 
 ```bash
 set -a && source .env && set +a
-(cd contracts && forge script script/Deploy.s.sol:Deploy --rpc-url "$BASE_SEPOLIA_RPC" --broadcast)
+export SHADOWPASS_NETWORK=base-sepolia
+(cd contracts && forge script script/Deploy.s.sol:Deploy --rpc-url "$BASE_SEPOLIA_RPC" --broadcast) &&
+  node scripts/record-deployment.mjs --rpc-url "$BASE_SEPOLIA_RPC"
 ```
 
-不要提交 `.env` 或任何测试网私钥。
+部署脚本只接受 Anvil `31337` 和 Base Sepolia `84532`，其他链（包括主网）会直接拒绝。部署文件只在广播成功、所有回执成功且链上地址校验通过后生成。不要提交 `.env` 或任何测试网私钥。
