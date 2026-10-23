@@ -58,11 +58,21 @@ describe("MCP tools", () => {
       mailbox,
       services: {
         payment: {
-          pay: async () => ({ budgetNf: "7", tx: "0xabc", resource: "https://merchant.test/report", amount: "20" }),
+          pay: async () => ({
+            budgetNf: "7",
+            tx: "0xabc",
+            resource: "https://merchant.test/report",
+            amount: "20",
+            resourceContent: { text: "report body", truncated: false, trust: "untrusted" },
+          }),
         },
       },
     }), { url: "https://merchant.test/report", maxAmount: 20n });
-    expect(result).toMatchObject({ budgetNf: "7", receiptReported: true });
+    expect(result).toMatchObject({
+      budgetNf: "7",
+      receiptReported: true,
+      resourceContent: { text: "report body", truncated: false, trust: "untrusted" },
+    });
     expect(bodies).toHaveLength(1);
     expect(await listReceipts(context(fixture))).toEqual([
       expect.objectContaining({ budgetNf: "7", tx: "0xabc", reported: true }),
