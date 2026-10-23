@@ -24,6 +24,7 @@
 | 工单拆分（#2–#13，总览 #14）、README、`docs/INTERFACES.md`、`AGENTS.md` | ✅ |
 | 演示前加固 #46（必做）：facilitator 启动、领币限流、CORS、合约 faucet 与产物托管说明 | ✅ 启动冒烟、失败不扣额度、每日可配置、CORS 预检、10,000/100 spUSD 边界和外部产物托管文档完成 |
 | #46 后续加固：本地签名、回执 pending、队列上限、metrics、MCP 状态 TTL 与配对生命周期 | ✅ 全仓 typecheck/test、merchant E2E 与钱包构建通过；Anvil 空闲区块实际从 36 增至 41，CI 见后续 PR |
+| 端到端演示 #13：一键编排、20 用户匿名集、采购/理财双分支、对照面板、3 分钟剧本与备用录屏 | ✅ 真实 D2 采购/理财/赎回 E2E 通过；浏览器 1440/390/320 px 验收，33 秒备用录屏与答辩材料已生成，见 `docs/demo/` |
 | 域名（passkey RP ID） | ✅ `shadowpass-wallet.vercel.app` |
 | monorepo 骨架、`docs/ARCHITECTURE.md`、CI | ✅ |
 | 演示形态：不做原生 App；**Chrome + Google 密码管理器 + Touch ID**（PRF 已实测可用）；Safari 备用（未测）；Web Push 选做 | ✅ 2026-10-23 |
