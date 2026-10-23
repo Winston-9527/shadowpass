@@ -309,7 +309,7 @@ memo      = crypto_box_seal(plaintext, recipientBoxPk)                          
 | 方式 | 流程 | gas |
 |---|---|---|
 | 从外部钱包充值（真实流程） | 钱包页面经 EIP-1193（MetaMask 等）连接外部地址 → 本地生成 `budget_mint` 证明和 `cm` → 外部钱包发出 `approve` 和 `Gate.deposit` | 外部地址支付 |
-| 测试网一键领取（演示） | `ShadowToken.faucetDeposit`：代币合约给自己铸币、授权 Gate、代为调用 `deposit`。走 facilitator 代付时 `msg.sender` 都是 facilitator，所以合约只设全局每日上限，单个用户的限额由 facilitator 按 IP 控制 | facilitator 代付 |
+| 测试网一键领取（演示） | `ShadowToken.faucetDeposit`：代币合约给自己铸币、授权 Gate、代为调用 `deposit`。走 facilitator 代付时 `msg.sender` 都是 facilitator，所以合约设全局每日 10,000 spUSD 上限和单笔 100 spUSD 上限；单个用户的频次由 facilitator 按 IP 控制 | facilitator 代付 |
 
 入金是公开的（谁、何时、多少）。钱包只提供固定面额（10 / 50 / 100），并提示入金后隔一段时间再分给 Agent，以减少关联。分给 Agent 的 `transferBudget` 是私密的。入金得到的票据：`owner = 管家（ent1）`，`lin = [cert0, 0, 0, 0]`。
 
@@ -359,5 +359,5 @@ POST /relay/:action      body: { "args": { ... } }       -> 200 { "transaction":
 | `registerState` | `ShadowGate.registerState(issued, revoked, root)` |
 
 - 发送前先 `eth_call` 模拟，失败就返回 400 和 revert 名称，不上链。
-- 按 IP 限流（`faucetDeposit` 每 IP 每天 1 次），可信代理头的规则同 §9。
+- 按 IP 限流；`relay` 默认每分钟 60 次，`faucetDeposit` 的每日次数由 `RELAY_FAUCET_PER_DAY` 配置（默认 1），且只在模拟成功后计入。可信代理头的规则同 §9。
 - 真实入金（§12，从 MetaMask 发出）不经过这里。

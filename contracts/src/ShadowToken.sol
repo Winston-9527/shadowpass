@@ -7,9 +7,11 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IShadowGate} from "./interfaces/IShadowGate.sol";
 
 /// Six-decimal test stablecoin. `faucetDeposit` is testnet-only: it mints, approves the Gate and deposits a note
-/// for the caller while enforcing a global daily faucet limit. Per-user limits belong to the facilitator.
+/// for the caller while enforcing a global daily faucet limit and a per-call cap. Per-user limits belong to the
+/// facilitator.
 contract ShadowToken is ERC20, Ownable, ReentrancyGuard {
-    uint256 public constant DAILY_FAUCET_LIMIT = 100 * 10 ** 6;
+    uint256 public constant DAILY_FAUCET_LIMIT = 10_000 * 10 ** 6;
+    uint256 public constant MAX_FAUCET_AMOUNT = 100 * 10 ** 6;
 
     address public immutable gate;
     uint256 public faucetDay;
@@ -18,6 +20,7 @@ contract ShadowToken is ERC20, Ownable, ReentrancyGuard {
     error ZeroAddress();
     error ZeroAmount();
     error FaucetLimit();
+    error FaucetAmountTooHigh();
 
     event Faucet(address indexed account, uint256 amount);
 
@@ -37,7 +40,7 @@ contract ShadowToken is ERC20, Ownable, ReentrancyGuard {
     }
 
     function faucet() external returns (uint256 amount) {
-        amount = DAILY_FAUCET_LIMIT;
+        amount = MAX_FAUCET_AMOUNT;
         _faucet(amount);
         _mint(msg.sender, amount);
         emit Faucet(msg.sender, amount);
@@ -69,6 +72,7 @@ contract ShadowToken is ERC20, Ownable, ReentrancyGuard {
 
     function _faucet(uint256 amount) private {
         if (amount == 0) revert ZeroAmount();
+        if (amount > MAX_FAUCET_AMOUNT) revert FaucetAmountTooHigh();
         uint256 day = block.timestamp / 1 days;
         uint256 claimed = faucetDay == day ? faucetClaimed : 0;
         if (claimed + amount > DAILY_FAUCET_LIMIT) revert FaucetLimit();
