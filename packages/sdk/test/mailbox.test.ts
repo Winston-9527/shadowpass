@@ -19,7 +19,11 @@ describe("MailboxClient", () => {
         return new Response(JSON.stringify({ id: store.length }), { status: 200 });
       }
       if (store.length === 1) store.push({ id: 2, ct: "AAAA", ts: 2 });
-      return new Response(JSON.stringify(store), { status: 200 });
+      return new Response(JSON.stringify([
+        ...store,
+        { id: "not-an-id", ct: "AAAA" },
+        { id: 3, ct: 123 },
+      ]), { status: 200 });
     }));
     const client = new MailboxClient("https://mailbox.example");
     const id = await client.send(owner.box.publicKey, { type: "receipt", amount: "1" });

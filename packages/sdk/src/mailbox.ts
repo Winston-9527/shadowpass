@@ -73,9 +73,9 @@ export class MailboxClient {
     if (!Array.isArray(entries)) throw new Error("mailbox poll returned non-array response");
     const output: MailboxEntry<T>[] = [];
     for (const raw of entries) {
-      if (!raw || typeof raw !== "object") throw new Error("mailbox poll returned invalid entry");
+      if (!raw || typeof raw !== "object") continue;
       const entry = raw as { id?: unknown; ct?: unknown; ts?: unknown };
-      if (!Number.isSafeInteger(entry.id) || typeof entry.ct !== "string") throw new Error("mailbox poll returned invalid entry");
+      if (!Number.isSafeInteger(entry.id) || typeof entry.ct !== "string") continue;
       const result: MailboxEntry<T> = { id: Number(entry.id), ct: entry.ct, decoded: false };
       if (typeof entry.ts === "number") result.ts = entry.ts;
       try {
@@ -95,5 +95,18 @@ export class MailboxClient {
       output.push(result);
     }
     return output;
+  }
+
+  async pollAll<T = unknown>(keyPair: BoxKeyPair, after = 0): Promise<MailboxEntry<T>[]> {
+    const output: MailboxEntry<T>[] = [];
+    let cursor = after;
+    for (;;) {
+      const batch = await this.poll<T>(keyPair, cursor);
+      output.push(...batch);
+      if (batch.length < 200) return output;
+      const next = batch[batch.length - 1]?.id;
+      if (next === undefined || next <= cursor) throw new Error("mailbox pagination did not advance");
+      cursor = next;
+    }
   }
 }

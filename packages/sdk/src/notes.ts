@@ -90,7 +90,7 @@ export interface ScanNotesOptions {
 export function scanNotes(state: any, logs: any[], options: ScanNotesOptions): Promise<Note[]> {
   return (async () => {
     const memos = new Map<string, Uint8Array>(state?.memos ?? []);
-    const inserted = new Set<string>();
+    const inserted = new Set<string>((state?.notes?.leaves ?? []).map((cm: bigint) => cm.toString()));
     for (const raw of logs) {
       const event = decodeShadowEvent(raw);
       if (!event) continue;

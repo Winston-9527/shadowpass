@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { identity as referenceIdentity, ShadowWorld } from "@shadowpass/circuits/world";
 import { decodeBundle, encodeBundle } from "../src/bundle.js";
+import { hexToBytes } from "../src/crypto.js";
 import { deriveKeys, identityFromPrv, recoveryUnwrap, recoveryWrap, unwrapSeed, wrapSeed } from "../src/keys.js";
 import type { CertificateBundle } from "../src/types.js";
+import {
+  SPW1_PASSKEY_ENVELOPE,
+  SPW1_RECOVERY_ENVELOPE,
+  SPW1_TEST_PRF,
+  SPW1_TEST_SEED,
+} from "./fixtures/envelopes.js";
 
 describe("keys and bundles", () => {
   it("derives the same EdDSA identity as the reference world", async () => {
@@ -33,6 +40,15 @@ describe("keys and bundles", () => {
     expect(wrapped).toHaveLength(81);
     expect(await unwrapSeed(prf, wrapped)).toEqual(seed);
     const recovery = await recoveryWrap("correct horse battery staple", seed);
+    expect(await recoveryUnwrap("correct horse battery staple", recovery)).toEqual(seed);
+  });
+
+  it("opens the frozen SPW1 passkey and recovery envelopes", async () => {
+    const seed = hexToBytes(SPW1_TEST_SEED);
+    const prf = hexToBytes(SPW1_TEST_PRF);
+    const passkey = hexToBytes(SPW1_PASSKEY_ENVELOPE);
+    const recovery = hexToBytes(SPW1_RECOVERY_ENVELOPE);
+    expect(await unwrapSeed(prf, passkey)).toEqual(seed);
     expect(await recoveryUnwrap("correct horse battery staple", recovery)).toEqual(seed);
   });
 

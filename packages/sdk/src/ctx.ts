@@ -24,7 +24,7 @@ export interface CtxHashInput {
   chainId: bigint | number;
   gate: Address;
   action: Action;
-  memoChange?: Hex | Uint8Array;
+  memoChange: Hex | Uint8Array;
 }
 
 export interface ReqHashInput {
@@ -36,6 +36,7 @@ export interface ReqHashInput {
 }
 
 export function ctxHash({ chainId, gate, action, memoChange }: CtxHashInput): bigint {
+  if (memoChange === undefined) throw new Error("memoChange required");
   const encoded = encodeAbiParameters(ctxParameters, [
     BigInt(chainId),
     gate,

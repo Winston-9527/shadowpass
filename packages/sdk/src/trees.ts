@@ -82,6 +82,10 @@ export class MerkleTree {
     return MerkleTree.import(this.tree.export());
   }
 
+  copyFrom(other: MerkleTree): void {
+    this.tree = LeanIMT.import(hashPair, other.export(), (value) => BigInt(value));
+  }
+
   export(): string {
     return this.tree.export();
   }
@@ -202,6 +206,12 @@ export class IndexedMerkleTree {
 
   clone(): IndexedMerkleTree {
     return new IndexedMerkleTree(this.depth, this.leaves, this.levels);
+  }
+
+  copyFrom(other: IndexedMerkleTree): void {
+    if (other.depth !== this.depth) throw new Error("indexed tree depth mismatch");
+    this.leaves = other.leaves.map((leaf) => ({ ...leaf }));
+    this.levels = other.levels.map((level) => new Map(level));
   }
 
   reset(): void {

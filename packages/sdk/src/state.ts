@@ -1,5 +1,5 @@
-import type { Address } from "viem";
-import { decodeShadowEvent } from "./events.js";
+import type { Address, Hex } from "viem";
+import { decodeShadowEvent, isKnownShadowEventLog, shadowEventTopics } from "./events.js";
 import { IndexedMerkleTree, MerkleTree, stateRoot } from "./trees.js";
 import type { Deployment } from "./types.js";
 
@@ -8,6 +8,7 @@ export interface ChainLogClient {
     address: Address[];
     fromBlock: bigint;
     toBlock?: bigint;
+    topics?: readonly (Hex | readonly Hex[] | null)[];
   }): Promise<any[]>;
   getBlockNumber?(): Promise<bigint>;
 }
@@ -58,6 +59,7 @@ export class ChainState {
   private toBlock?: bigint;
   private maxBlockRange = 2_000n;
   private reorgWindow = 12;
+  private updatePromise?: Promise<void>;
 
   static async sync(client: ChainLogClient, deployment: Deployment, options: ChainStateOptions = {}): Promise<ChainState> {
     const state = new ChainState();
@@ -84,11 +86,28 @@ export class ChainState {
     return state;
   }
 
-  async update(): Promise<void> {
+  update(): Promise<void> {
+    if (this.updatePromise) return this.updatePromise;
+    const promise = this.runUpdate();
+    this.updatePromise = promise;
+    promise.then(
+      () => { if (this.updatePromise === promise) this.updatePromise = undefined; },
+      () => { if (this.updatePromise === promise) this.updatePromise = undefined; },
+    );
+    return promise;
+  }
+
+  private async runUpdate(): Promise<void> {
     if (!this.client || !this.deployment) throw new Error("ChainState.update requires sync(client, deployment)");
     const latest = this.toBlock ?? (this.client.getBlockNumber ? await this.client.getBlockNumber() : undefined);
     if (latest === undefined) throw new Error("toBlock or getBlockNumber is required");
-    this.reset();
+    const staged = new ChainState();
+    staged.client = this.client;
+    staged.deployment = this.deployment;
+    staged.startBlock = this.startBlock;
+    staged.toBlock = this.toBlock;
+    staged.maxBlockRange = this.maxBlockRange;
+    staged.reorgWindow = this.reorgWindow;
     // Replaying the full range on every update is stronger than the required 12-block reorg rewind.
     for (let fromBlock = this.startBlock; fromBlock <= latest; fromBlock += this.maxBlockRange) {
       const candidate = fromBlock + this.maxBlockRange - 1n;
@@ -102,10 +121,12 @@ export class ChainState {
         ],
         fromBlock,
         toBlock,
+        topics: [shadowEventTopics],
       });
-      this.replay(logs);
+      staged.replay(logs);
     }
-    this.lastBlock = latest;
+    staged.lastBlock = latest;
+    this.replaceFrom(staged);
   }
 
   replay(logs: any[]): void {
@@ -116,6 +137,7 @@ export class ChainState {
       return Number((left.logIndex ?? left.index ?? 0) - (right.logIndex ?? right.index ?? 0));
     });
     for (const log of ordered) {
+      if (!isKnownShadowEventLog(log)) continue;
       const event = decodeShadowEvent(log, true);
       if (!event) throw new Error("event decoder returned no event in strict mode");
       const args = event.args;
@@ -146,11 +168,19 @@ export class ChainState {
           break;
         }
         case "Revoked": {
+          const index = Number(asBigInt(args.index, "Revoked.index"));
+          const expectedIndex = this.revoked.leaves.length;
+          const oldRoot = asBigInt(args.oldRoot, "Revoked.oldRoot");
+          if (index !== expectedIndex) throw new Error(`Revoked index mismatch: expected ${expectedIndex}, got ${index}`);
+          if (oldRoot !== this.revoked.root) throw new Error("Revoked oldRoot mismatch");
           this.revoked.insert(asBigInt(args.entry, "Revoked.entry"));
           this.assertRoot("revoked", args.newRoot, this.revoked.root);
           break;
         }
         case "Joined": {
+          const index = Number(asBigInt(args.index, "Joined.index"));
+          const expectedIndex = this.group.size;
+          if (index !== expectedIndex) throw new Error(`Joined index mismatch: expected ${expectedIndex}, got ${index}`);
           this.group.insert(asBigInt(args.commitment, "Joined.commitment"));
           this.assertRoot("group", args.root, this.group.root);
           break;
@@ -166,9 +196,15 @@ export class ChainState {
         case "NoteMemo":
           this.memos.set(asBigInt(args.cm, "NoteMemo.cm").toString(), asBytes(args.memo, "NoteMemo.memo"));
           break;
-        case "StateRegistered":
-          this.registeredStateRoots.add(asBigInt(args.stateRoot, "StateRegistered.stateRoot").toString());
+        case "StateRegistered": {
+          const issued = asBigInt(args.issued, "StateRegistered.issued");
+          const revoked = asBigInt(args.revoked, "StateRegistered.revoked");
+          const root = asBigInt(args.root, "StateRegistered.root");
+          const registered = asBigInt(args.stateRoot, "StateRegistered.stateRoot");
+          if (stateRoot(issued, revoked, root) !== registered) throw new Error("StateRegistered stateRoot mismatch");
+          this.registeredStateRoots.add(registered.toString());
           break;
+        }
         case "Executed":
           this.spentNullifiers.add(asBigInt(args.budgetNf, "Executed.budgetNf").toString());
           break;
@@ -210,6 +246,21 @@ export class ChainState {
     this.spentNullifiers.clear();
     this.registeredStateRoots.clear();
     this.lastBlock = this.startBlock - 1n;
+  }
+
+  private replaceFrom(other: ChainState): void {
+    this.issued.copyFrom(other.issued);
+    this.rootTree.copyFrom(other.rootTree);
+    this.notes.copyFrom(other.notes);
+    this.group.copyFrom(other.group);
+    this.revoked.copyFrom(other.revoked);
+    this.memos.clear();
+    for (const [key, value] of other.memos) this.memos.set(key, Uint8Array.from(value));
+    this.spentNullifiers.clear();
+    for (const value of other.spentNullifiers) this.spentNullifiers.add(value);
+    this.registeredStateRoots.clear();
+    for (const value of other.registeredStateRoots) this.registeredStateRoots.add(value);
+    this.lastBlock = other.lastBlock;
   }
 
   private assertRoot(name: string, eventRoot: unknown, localRoot: bigint): void {
