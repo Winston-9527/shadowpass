@@ -1,6 +1,6 @@
 # ShadowPass Wallet
 
-用户端 PWA（#10、#11）。主演示环境为 Mac Chrome + Google 密码管理器 + Touch ID，Safari 为备用；链上流程已在 Anvil 验收，Base Sepolia 部署接线待后续工单。
+用户端 PWA（#10–#12）。主演示环境为 Mac Chrome + Google 密码管理器 + Touch ID，Safari 为备用；链上流程已在 Anvil 验收，Base Sepolia 部署接线待后续工单。
 
 ## 开发
 
@@ -79,6 +79,13 @@ VITE_MAILBOX_URL=http://localhost:8787
 5. 授权树显示主人、管家和各 Agent 卡的能力、额度、剩余、有效期与状态，并按 `Revocations` 链上状态展示吊销。恢复时从 `/slot` 取回种子，先扫描 `NoteMemo` 重建票据，再按 `cardId` 合并逐卡 `owner_card` 记录；记录必须通过由种子派生的 HMAC、签名、根关系和链上 `Issued` 事件核对。MAC 错误或缺失的记录直接丢弃，也不能推进 `seq`；已核验票据和凭证包不会被记录覆盖。
 6. `budget_transfer` 代付前先保存 cert1、两张输出票据、备忘和 calldata；响应丢失时按所有 `cm1`/`cm2` 候选核链，不重复扣预算。遇到 `StaleRevokedRoot`/`StaleNoteRoot` 时用同一父票据重建证明并保留旧候选；遇到 `BudgetSpent` 时清除 pending 并提示重新选择票据。存在 pending 时界面明确显示那张卡，不能悄悄复用给另一条配对请求。凭证投递失败时卡片保留 `pending_delivery` 和完整加密凭证包，重试只重投原包。开通、入金、发卡、恢复和重投共用一个跨标签页钱包锁，拿到锁后重新读取最新本地账本。
 
+## 账单、异常提醒与吊销
+
+- 钱包只从链上 `OwnerCiphertext` 解出终端 Agent，并用其密钥匹配授权树。信箱 `receipt` 只用于展示：`budgetNf`、交易哈希和金额必须同时匹配链上事件，才标记为“已上报”。
+- 账单页的异常规则保存在本地 IndexedDB，默认启用未上报、5 分钟超过 5 笔、单笔超过 20 USDC。页面每 7 秒轮询，命中后显示页面警戒栏、发出提示音并闪烁标题栏；无用户手势时浏览器可能阻止声音，标题栏提醒仍会工作。
+- 管家可以吊销任一 Agent 的 cert1；Alice 可以用签名钥和 `own_w` 吊销 cert0 整棵树。两种操作都调用 SDK `revokeCertInput` 生成 `main_revoke` 证明，再通过 facilitator 的 `revoke` relay 提交。
+- 链上吊销不是立即冻结。Anvil 部署的宽限窗口是 10 秒，窗口内旧状态根仍可被 Gate 接受；页面会显示当前窗口长度，不会把它描述成立即生效。
+
 Anvil 的 `faucetDeposit` 是整个代币合约每天一次，不是每个钱包一次。重复跑真实链 E2E 前要重启 `npm run dev:chain`，否则第二次会触发 faucet 限额。
 
 ## 证明产物
@@ -92,7 +99,7 @@ npm run setup
 npm run publish-artifacts -- v2
 ```
 
-`setup` 需要本地 `artifacts/ptau/powersOfTau28_hez_final_18.ptau`。SDK 会用 `packages/sdk/src/artifact-hashes.ts` 校验 zkey 和 vk，该表由 `circuits/zk/MANIFEST.sha256` 生成。钱包当前需要的 `main_reg.zkey`、`budget_mint.zkey`、`budget_transfer.zkey` 及对应 vk/wasm 必须齐全。
+`setup` 需要本地 `artifacts/ptau/powersOfTau28_hez_final_18.ptau`。SDK 会用 `packages/sdk/src/artifact-hashes.ts` 校验 zkey 和 vk，该表由 `circuits/zk/MANIFEST.sha256` 生成。钱包当前需要的 `main_d2.zkey`、`main_reg.zkey`、`main_revoke.zkey`、`budget_mint.zkey`、`budget_transfer.zkey` 及对应 vk/wasm 必须齐全。
 
 ## 验证
 
@@ -112,7 +119,9 @@ npm run e2e:chain -w @shadowpass/wallet
 npm run e2e:browser-chain -w @shadowpass/wallet
 ```
 
-`e2e:chain` 直接调用钱包 flows，覆盖开通、100 入金、PAY 40、TREASURY 50、信箱凭证同步、`wallet_status` 和逐卡主人记录恢复。`e2e:browser-chain` 在 Chrome、生产构建和 Vite preview 中重复同一流程，并检查授权树和 IndexedDB 中的 issue/transfer 哈希。两者使用 PRF 替身，不替代真实 Touch ID 的录屏验收。
+`e2e:chain` 直接调用钱包 flows，覆盖开通、100 入金、PAY 40、TREASURY 50、信箱凭证同步、`wallet_status` 和逐卡主人记录恢复。它随后用真实 `main_d2` 证明直接向 Anvil `ShadowGate.execute` 写一笔不上报的付款，验证账单归属和错误查看钥；再执行 Agent 吊销、整树吊销和 `TREASURY_SUPPLY`，并在宽限窗口后确认旧 `revoked` 根得到 `StaleRevokedRoot`。这里的直接 Gate 调用是故意不经过 MCP `pay` 的恶意 Agent 模拟，不等于完整 x402 交付链路。
+
+`e2e:browser-chain` 在 Chrome、生产构建和 Vite preview 中重复开通与发卡，然后从 Node 侧提交同一笔真实 Gate 付款，检查页面在 30 秒内出现“未上报”警戒栏和标题栏闪烁，再通过 UI 生成吊销证明并显示 10 秒宽限窗口。两者使用 PRF 替身，不替代真实 Touch ID 的录屏验收；自动化也不能证明提示音一定播放，声音在浏览器自动播放策略下可能被阻止。
 
 真实 Touch ID 仍需人工验收：
 

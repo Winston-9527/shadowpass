@@ -23,6 +23,7 @@ const registryAbi = parseAbi([
   "function domain() view returns (uint256)",
   "function leafOfNullifier(uint256 nf) view returns (uint256)",
 ]);
+const revocationsAbi = parseAbi(["function window() view returns (uint64)"]);
 const tokenAbi = parseAbi([
   "function approve(address spender,uint256 amount) returns (bool)",
 ]);
@@ -64,9 +65,11 @@ export interface SubmitExternalDepositOptions {
 export interface WalletGateway {
   sync(): Promise<ChainState>;
   logs(): Promise<unknown[]>;
-  relay(action: "join" | "register" | "faucetDeposit" | "issue" | "transferBudget" | "registerState", args: Record<string, unknown>): Promise<RelayResult>;
+  blockTimestamps(blockNumbers: readonly bigint[]): Promise<Map<string, number>>;
+  relay(action: "join" | "register" | "faucetDeposit" | "issue" | "transferBudget" | "registerState" | "revoke", args: Record<string, unknown>): Promise<RelayResult>;
   registryDomain(): Promise<bigint>;
   registryLeaf(nf: bigint): Promise<bigint>;
+  revocationWindow(): Promise<bigint>;
   externalDeposit(input: ExternalDepositInput): Promise<ExternalDepositResult>;
 }
 
@@ -117,6 +120,7 @@ declare global {
 
 export class BrowserWalletGateway implements WalletGateway {
   private readonly publicClient: PublicClient;
+  private readonly blockTimeCache = new Map<string, number>();
 
   constructor(
     private readonly config: {
@@ -153,6 +157,21 @@ export class BrowserWalletGateway implements WalletGateway {
     return output;
   }
 
+  async blockTimestamps(blockNumbers: readonly bigint[]): Promise<Map<string, number>> {
+    const output = new Map<string, number>();
+    const missing = [...new Set(blockNumbers.map(String))]
+      .filter((key) => !this.blockTimeCache.has(key));
+    await Promise.all(missing.map(async (key) => {
+      const block = await this.publicClient.getBlock({ blockNumber: BigInt(key) });
+      this.blockTimeCache.set(key, Number(block.timestamp) * 1_000);
+    }));
+    for (const key of blockNumbers.map(String)) {
+      const value = this.blockTimeCache.get(key);
+      if (value !== undefined) output.set(key, value);
+    }
+    return output;
+  }
+
   async registryDomain(): Promise<bigint> {
     return this.publicClient.readContract({
       address: this.config.deployment.registry,
@@ -167,6 +186,11 @@ export class BrowserWalletGateway implements WalletGateway {
       abi: registryAbi,
       functionName: "leafOfNullifier",
       args: [nf],
+  async revocationWindow(): Promise<bigint> {
+    return this.publicClient.readContract({
+      address: this.config.deployment.revocations,
+      abi: revocationsAbi,
+      functionName: "window",
     });
   }
 

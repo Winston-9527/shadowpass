@@ -12,23 +12,32 @@ import {
 } from "@shadowpass/mcp";
 import {
   ChainState,
+  decodeNoteMemo,
   deriveKeys,
   loadArtifacts,
   loadDeployment,
   MailboxClient,
+  noteCm,
+  scanBill,
+  truncateKey,
   prove as proveCircuit,
   toCalldata,
   type ArtifactSet,
   type CircuitName,
 } from "@shadowpass/sdk";
-import { BrowserWalletGateway } from "../src/flows/chain.js";
+import { createPublicClient, http } from "viem";
+import { BrowserWalletGateway, waitForChainState } from "../src/flows/chain.js";
+import { loadBillSnapshot, mergeWalletBills } from "../src/flows/bill.js";
 import { deposit } from "../src/flows/deposit.js";
 import { availableStewardBudget, issueCard } from "../src/flows/issue.js";
 import { onboard } from "../src/flows/onboard.js";
 import type { ProofService } from "../src/flows/prove.js";
 import { publishOwnerRecords, recoverNotes, restoreOwnerRecords } from "../src/flows/snapshot.js";
+import { revokeAgent, revokeTree } from "../src/flows/revoke.js";
 import { emptyLedger, type CalldataProof, type WalletLedger } from "../src/flows/types.js";
 import { bytesToHex } from "../src/lib/bytes.js";
+import { preparePayment, prepareTreasurySupply, registerActionState, simulateAction, submitAction } from "./live-chain-actions.mts";
+import { buildAuthorizationTree } from "../src/views/Tree.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const artifactsDir = process.env.ARTIFACTS_DIR ?? path.join(root, "apps/wallet/public/zk/circuits-v2");
@@ -209,6 +218,150 @@ try {
   assert.deepEqual(treasuryStatus.capabilities, ["TREASURY"]);
   assert.equal(treasuryStatus.remainingBudget, "50000000");
 
+  const buyerBundle = await buyerStore.loadBundle();
+  const treasuryBundle = await treasuryStore.loadBundle();
+  if (!buyerBundle || !treasuryBundle) throw new Error("credential bundle was not delivered to an Agent store");
+  const buyerNote = buyerBundle.note;
+  const treasuryNote = treasuryBundle.note;
+  const publicClient = createPublicClient({ transport: http(rpcUrl) });
+  const merchant = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC" as const;
+
+  const payment = await preparePayment({
+    deployment,
+    state,
+    store: buyerStore,
+    bundle: buyerBundle,
+    note: buyerNote,
+    amount: 5_000_000n,
+    payTo: merchant,
+    resource: "shadowpass://e2e/malicious-report",
+    seed: "bill-e2e-payment-1",
+    artifactsDir,
+  });
+  await registerActionState(gateway, payment);
+  const paymentStarted = timer();
+  const paymentTx = await submitAction(publicClient, rpcUrl, deployment, payment);
+  const paymentElapsed = elapsed(paymentStarted);
+  state = await waitForChainState(gateway, (candidate) => candidate.spentNullifiers.has(payment.budget.budgetNf.toString()));
+  assert.equal(state.spentNullifiers.has(payment.budget.budgetNf.toString()), true);
+
+  const ownerBills = mergeWalletBills({
+    entries: scanBill(state, await gateway.logs(), bundle.view.vsk),
+    ledger,
+    receipts: [],
+  });
+  const maliciousBill = ownerBills.find((bill) => bill.budgetNf === payment.budget.budgetNf);
+  assert.ok(maliciousBill, "owner did not see the real Gate payment");
+  assert.equal(maliciousBill.agentName, "buyer");
+  assert.equal(maliciousBill.amount, 5_000_000n);
+  assert.equal(maliciousBill.reported, false);
+
+  const otherView = await deriveKeys(Uint8Array.from({ length: 32 }, (_, index) => index + 177));
+  const unseenBills = scanBill(state, await gateway.logs(), otherView.view.vsk);
+  assert.equal(unseenBills.length >= 1, true);
+  assert.equal(unseenBills.every((bill) => bill.chain === null), true);
+
+  const changeMemo = state.memos.get(noteCm({
+    own: [BigInt(payment.change.own[0]), BigInt(payment.change.own[1])],
+    q: BigInt(payment.change.q),
+    lin: payment.change.lin.map(BigInt) as [bigint, bigint, bigint, bigint],
+    rho: BigInt(payment.change.rho),
+  }).toString());
+  if (!changeMemo) throw new Error("payment change memo is missing");
+  const paymentChange = await decodeNoteMemo(changeMemo, buyerStore.boxPrivateKey);
+  if (!paymentChange) throw new Error("buyer could not decrypt its payment change note");
+  await buyerStore.addNote({
+    own: paymentChange.own.map(String) as [string, string],
+    q: paymentChange.q.toString(),
+    lin: paymentChange.lin.map(String) as [string, string, string, string],
+    rho: paymentChange.rho.toString(),
+  });
+
+  const pendingPayment = await preparePayment({
+    deployment,
+    state,
+    store: buyerStore,
+    bundle: buyerBundle,
+    note: {
+      own: paymentChange.own.map(String) as [string, string],
+      q: paymentChange.q.toString(),
+      lin: paymentChange.lin.map(String) as [string, string, string, string],
+      rho: paymentChange.rho.toString(),
+    },
+    amount: 2_000_000n,
+    payTo: merchant,
+    resource: "shadowpass://e2e/after-revoke",
+    seed: "bill-e2e-payment-2",
+    artifactsDir,
+  });
+  await registerActionState(gateway, pendingPayment);
+
+  const buyerCard = ledger.cards.find((card) => card.id === pay.cardId);
+  if (!buyerCard) throw new Error("buyer card is missing from the wallet ledger");
+  const revokeStarted = timer();
+  const agentRevocation = await revokeAgent({ ledger, bundle, gateway, proofs, card: buyerCard });
+  const revokeElapsed = elapsed(revokeStarted);
+  state = await gateway.sync();
+  const windowSeconds = await gateway.revocationWindow();
+  assert.equal(windowSeconds, 10n);
+
+  const treasurySupply = await prepareTreasurySupply({
+    publicClient,
+    deployment,
+    state,
+    store: treasuryStore,
+    bundle: treasuryBundle,
+    note: treasuryNote,
+    amount: 10_000_000n,
+    term: 60n,
+    seed: "bill-e2e-treasury",
+    artifactsDir,
+  });
+  await registerActionState(gateway, treasurySupply);
+  const treasurySupplyStarted = timer();
+  const treasuryTx = await submitAction(publicClient, rpcUrl, deployment, treasurySupply);
+  const treasurySupplyElapsed = elapsed(treasurySupplyStarted);
+  state = await waitForChainState(gateway, (candidate) => candidate.spentNullifiers.has(treasurySupply.budget.budgetNf.toString()));
+  assert.equal(state.spentNullifiers.has(treasurySupply.budget.budgetNf.toString()), true);
+  assert.equal(state.revoked.has(truncateKey(BigInt(buyerCard.id))), true);
+  const treeAfterAgentRevoke = buildAuthorizationTree(ledger, bundle, state, ownerBills);
+  assert.equal(treeAfterAgentRevoke.cards.find((card) => card.id === buyerCard.id)?.status, "revoked");
+  assert.equal(treeAfterAgentRevoke.cards.find((card) => card.id === treasury.cardId)?.status, "active");
+
+  await mailbox.send(bundle.box.publicKey, {
+    type: "receipt",
+    budgetNf: treasurySupply.budget.budgetNf.toString(),
+    tx: treasuryTx,
+    resource: "treasury://e2e/supply",
+    amount: treasurySupply.action.amount.toString(),
+  });
+  const receiptSnapshot = await loadBillSnapshot({
+    ledger,
+    gateway,
+    mailbox,
+    bundle,
+  });
+  assert.equal(receiptSnapshot.bills.find((bill) => bill.budgetNf === treasurySupply.budget.budgetNf)?.reported, true);
+
+  await publicClient.request({ method: "evm_increaseTime", params: [Number(windowSeconds) + 2] } as any);
+  await publicClient.request({ method: "evm_mine", params: [] } as any);
+  let stalePaymentRejected = false;
+  let stalePaymentError = "";
+  try {
+    await simulateAction(publicClient, deployment, pendingPayment);
+  } catch (error) {
+    stalePaymentError = String(error);
+    stalePaymentRejected = /StaleRevokedRoot/.test(stalePaymentError);
+  }
+  assert.equal(stalePaymentRejected, true, `old revoked root was not rejected as expected: ${stalePaymentError}`);
+
+  const treeRevocation = await revokeTree({ ledger, bundle, gateway, proofs });
+  state = await gateway.sync();
+  assert.equal(state.revoked.has(truncateKey(BigInt(ledger.root!.hash))), true);
+  const finalOtherViewBills = scanBill(state, await gateway.logs(), otherView.view.vsk);
+  assert.equal(finalOtherViewBills.length >= 2, true);
+  assert.equal(finalOtherViewBills.every((bill) => bill.chain === null), true);
+
   await publishOwnerRecords(mailbox, bundle, ledger);
   const blank = emptyLedger(deployment.chainId, "anvil", bundle.sign.Ax);
   const records = await restoreOwnerRecords(mailbox, bundle, state, blank);
@@ -228,6 +381,9 @@ try {
       deposit100: { total: depositElapsed, ...funded.timings },
       issuePay40: { total: payElapsed, ...pay.timings },
       issueTreasury50: { total: treasuryElapsed, ...treasury.timings },
+      maliciousPayment: paymentElapsed,
+      revokeBuyer: revokeElapsed,
+      treasurySupply: treasurySupplyElapsed,
     },
     transactions: {
       register: ledger.registrationTx ?? checkpoint.find((entry) => entry.registrationTx)?.registrationTx,
@@ -237,8 +393,25 @@ try {
       treasuryIssue: treasury.ledger.cards.find((card) => card.id === treasury.cardId)?.issueTx,
       treasuryTransfer: treasury.ledger.cards.find((card) => card.id === treasury.cardId)?.transferTx,
       finalChange: ledger.notes.find((entry) => entry.kind === "change" && BigInt(entry.note.q) === 10_000_000n)?.tx,
+      maliciousPayment: paymentTx,
+      revokeBuyer: agentRevocation.transaction,
+      treasurySupply: treasuryTx,
+      revokeTree: treeRevocation.transaction,
     },
     wallet: { stewardRemaining: "10000000", cards: ledger.cards.length },
+    bills: {
+      ownerDecrypted: ownerBills.length,
+      maliciousUnreported: maliciousBill.reported === false,
+      otherViewKeyDecrypted: finalOtherViewBills.filter((bill) => bill.chain !== null).length,
+      treasuryReceiptMatched: receiptSnapshot.bills.find((bill) => bill.budgetNf === treasurySupply.budget.budgetNf)?.reported === true,
+    },
+    revocation: {
+      windowSeconds: windowSeconds.toString(),
+      buyerRevoked: state.revoked.has(truncateKey(BigInt(buyerCard.id))),
+      treeRevoked: state.revoked.has(truncateKey(BigInt(ledger.root!.hash))),
+      stalePaymentRejected,
+      treasuryUnaffected: treeAfterAgentRevoke.cards.find((card) => card.id === treasury.cardId)?.status,
+    },
     mcp: [{ name: buyerStore.name, ...buyerStatus }, { name: treasuryStore.name, ...treasuryStatus }],
     recovery: { cards: recovered.cards.length, stewardRemaining: "10000000", noteCount: recovered.notes.length },
     memoOwner: { boxPk: bytesToHex(bundle.box.publicKey) },

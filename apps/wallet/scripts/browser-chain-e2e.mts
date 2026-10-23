@@ -14,6 +14,8 @@ import {
 } from "@shadowpass/mcp";
 import { ChainState, loadDeployment, MailboxClient } from "@shadowpass/sdk";
 import { createPublicClient, http } from "viem";
+import { BrowserWalletGateway } from "../src/flows/chain.js";
+import { preparePayment, registerActionState, submitAction } from "./live-chain-actions.mts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");
@@ -224,15 +226,52 @@ try {
     assert.ok(ledger.cards.every((card) => /^0x[0-9a-f]{64}$/i.test(card.issueTx)));
     assert.ok(ledger.cards.every((card) => /^0x[0-9a-f]{64}$/i.test(card.transferTx)));
 
+    const buyerBundle = await buyerStore.loadBundle();
+    if (!buyerBundle) throw new Error("buyer credential bundle is missing");
+    const gateway = new BrowserWalletGateway({ rpcUrl, facilitatorUrl, deployment });
+    const malicious = await preparePayment({
+      deployment,
+      state,
+      store: buyerStore,
+      bundle: buyerBundle,
+      note: buyerBundle.note,
+      amount: 5_000_000n,
+      payTo: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      resource: "shadowpass://browser-e2e/malicious",
+      seed: "browser-alert-payment",
+      artifactsDir: path.join(root, "apps/wallet/public/zk/circuits-v2"),
+    });
+    await registerActionState(gateway, malicious);
+    const alertStarted = Date.now();
+    const maliciousTx = await submitAction(client, rpcUrl, deployment, malicious);
+    await page.getByTestId("bill-alert").waitFor({ timeout: 30_000 });
+    const alertText = await page.getByTestId("bill-alert").textContent();
+    assert.match(alertText ?? "", /Unreported spend/);
+    await page.waitForFunction(() => document.title.includes("ShadowPass:"));
+    const alertMs = Date.now() - alertStarted;
+    await page.getByRole("button", { name: "Review bills", exact: true }).click();
+    await page.getByTestId("bill-row").first().waitFor();
+    assert.match(await page.locator(".bills-layout").textContent() ?? "", /Unreported/);
+    await page.screenshot({ path: path.join(outputDir, "wallet-unreported-bill.png"), fullPage: true });
+
+    await page.getByRole("button", { name: "Authorization", exact: true }).click();
+    await page.getByTestId("revoke-buyer").click();
+    await page.getByRole("button", { name: "Confirm revoke", exact: true }).click();
+    await page.getByText("revoked", { exact: true }).waitFor({ timeout: 30_000 });
+    const graceText = await page.locator(".grace-window").textContent();
+    assert.match(graceText ?? "", /10s/);
+    await page.screenshot({ path: path.join(outputDir, "wallet-revoked-grace.png"), fullPage: true });
+
     console.log(JSON.stringify({
       ok: true,
       browser: { channel: "chrome", version: chrome.version(), platform: process.platform, arm64: process.arch === "arm64" },
-      timingsMs: { onboard: onboardMs, faucetDeposit100: depositMs, issuePay40: payMs, issueTreasury50: treasuryMs },
+      timingsMs: { onboard: onboardMs, faucetDeposit100: depositMs, issuePay40: payMs, issueTreasury50: treasuryMs, alertAfterChainTx: alertMs },
       cardTimings: ledger.cards.map((card) => card.timings),
       authorizationTree: { cards: 2, stewardRemaining: "10000000" },
       crossTabIssuance: { pages: 2, cards: ledger.cards.length },
       mcp: [{ name: buyerStore.name, ...buyerStatus }, { name: treasuryStore.name, ...treasuryStatus }],
-      screenshots: ["wallet-funded-100.png", "wallet-authorization-tree.png"],
+      transactions: { maliciousPayment: maliciousTx },
+      screenshots: ["wallet-funded-100.png", "wallet-authorization-tree.png", "wallet-unreported-bill.png", "wallet-revoked-grace.png"],
     }, null, 2));
     await context.close();
   } finally {
