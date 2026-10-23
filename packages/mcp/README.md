@@ -11,6 +11,7 @@ Agent 侧 stdio MCP server。它把 Agent 的本地 EdDSA holder 私钥、X25519
 - 每次工具调用前刷新链上状态并同步信箱；链上状态不可用，或可信凭证依赖的链上写入暂时不可见时，保留信箱游标，不消费该凭证包。启动时会从链上票据备忘恢复本地票据。
 - 提供 `wallet_status`、`list_receipts`、`pay`、`treasury_supply`、`treasury_status`、`delegate`。
 - `pay` 通过官方 x402 fetch 客户端处理 402：使用 SDK 选票、构造 action 和找零 `memoChange`，生成 D1/D2/D3 证明并在本地验证通过后才提交；`spendControls` 只允许部署中的测试币，并限制单笔金额。
+- `pay` 返回商家响应体（最多 32 KiB），并标记为 `trust: "untrusted"`；付款成功后立即把找零票据写入本地 store。
 - `pay` 和 `treasury_supply` 在执行前本地检查能力位、金额上限和参数；能力不符时不会生成证明或发起网络请求。
 - 付款成功后记录收据并发送给主人信箱；`--malicious` 只跳过收据上报，仍保留本地记录。
 
@@ -74,6 +75,8 @@ claude mcp add shadowpass -- \
 ```
 
 重启客户端后，可以说“帮我买一份报告”；如果 Agent 尚未配对或付款后端未配置，工具会返回明确错误，不会直接付款。
+
+本地 anvil 必须持续出块，建议使用 `anvil --block-time 1`。Gate 的 `nowTs` 使用最新区块时间并限制 60 秒时钟偏差；链空闲过久时，需要先产生新区块，否则付款会因 `BadClock` 失败。
 
 ## 本地数据
 

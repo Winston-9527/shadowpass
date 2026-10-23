@@ -7,6 +7,7 @@ import {
 } from "@shadowpass/sdk";
 import type { CertificateBundle, Note } from "@shadowpass/sdk";
 import { capForBundle, credentialCap, credentialExpiry, validateCredentialChain } from "./credentials.js";
+import { lineageMatches, noteFromStored } from "./notes.js";
 import type { AgentStore } from "./store.js";
 import {
   McpToolError,
@@ -30,23 +31,6 @@ export interface McpToolContext {
   malicious: boolean;
   maxPayment: bigint;
   nowSeconds?: bigint;
-}
-
-function noteFromStored(note: CertificateBundle["note"]): Note {
-  return {
-    own: [BigInt(note.own[0]), BigInt(note.own[1])],
-    q: BigInt(note.q),
-    lin: [BigInt(note.lin[0]), BigInt(note.lin[1]), BigInt(note.lin[2]), BigInt(note.lin[3])],
-    rho: BigInt(note.rho),
-  };
-}
-
-function lineageMatches(note: Note, bundle: CertificateBundle): boolean {
-  for (let index = 0; index < 4; index += 1) {
-    const expected = index < bundle.chain.length ? BigInt(bundle.chain[index]!.hash) : 0n;
-    if (note.lin[index] !== expected) return false;
-  }
-  return true;
 }
 
 function assertCapability(bundle: CertificateBundle, capability: Capability): void {
@@ -154,7 +138,7 @@ export async function pay(context: McpToolContext, request: PaymentRequest): Pro
   await context.store.addReceipt(receipt);
 
   let receiptReported = false;
-  let receiptWarning: string | undefined;
+  const warnings = [...(result.warnings ?? [])];
   if (!context.malicious) {
     try {
       if (!context.mailbox) throw new Error("mailbox client is unavailable");
@@ -169,13 +153,13 @@ export async function pay(context: McpToolContext, request: PaymentRequest): Pro
       await context.store.addReceipt(receipt);
       receiptReported = true;
     } catch {
-      receiptWarning = "receipt_delivery_failed";
+      warnings.push("receipt_delivery_failed");
     }
   }
   return {
     ...result,
     receiptReported,
-    ...(receiptWarning ? { warning: receiptWarning } : {}),
+    ...(warnings.length ? { warnings } : {}),
   };
 }
 

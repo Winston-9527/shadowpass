@@ -35,6 +35,7 @@ import {
   type ShadowpassPayload,
 } from "@shadowpass/x402";
 import { encodeAbiParameters } from "viem";
+import { lineageMatches, noteFromStored } from "./notes.js";
 import type { AgentStore } from "./store.js";
 
 type PaymentRequirements = Parameters<ShadowpassPaymentBuilder["buildPayment"]>[0];
@@ -88,6 +89,7 @@ export interface ShadowpassPaymentBuilderOptions {
 export interface BuiltShadowpassPayment {
   payload: ShadowpassPayload;
   note: Note;
+  change: Note;
   budgetNf: bigint;
 }
 
@@ -129,15 +131,6 @@ function randomScalarBelow(bound: bigint): bigint {
   }
 }
 
-function noteFromStored(note: CertificateBundle["note"]): Note {
-  return {
-    own: [BigInt(note.own[0]), BigInt(note.own[1])],
-    q: BigInt(note.q),
-    lin: [BigInt(note.lin[0]), BigInt(note.lin[1]), BigInt(note.lin[2]), BigInt(note.lin[3])],
-    rho: BigInt(note.rho),
-  };
-}
-
 function certFromBundle(cert: CertificateBundle["chain"][number]): Cert {
   return {
     hop: cert.hop,
@@ -150,14 +143,6 @@ function certFromBundle(cert: CertificateBundle["chain"][number]): Cert {
     ownW: cert.ownW ? { x: BigInt(cert.ownW.x), y: BigInt(cert.ownW.y) } : undefined,
     hash: BigInt(cert.hash),
   };
-}
-
-function lineageMatches(note: Note, bundle: CertificateBundle): boolean {
-  for (let index = 0; index < 4; index += 1) {
-    const expected = index < bundle.chain.length ? BigInt(bundle.chain[index]!.hash) : 0n;
-    if (note.lin[index] !== expected) return false;
-  }
-  return true;
 }
 
 export class ShadowpassAgentPaymentBuilder implements ShadowpassPaymentBuilder {
@@ -204,7 +189,7 @@ export class ShadowpassAgentPaymentBuilder implements ShadowpassPaymentBuilder {
 
     const encryptionR = this.randomScalar(L);
     const encryptionK = this.randomScalar(L);
-    const changeRho = this.randomScalar(L);
+    const changeRho = this.randomScalar(1n << 250n);
     const expectedChange: Note = {
       own: [note.own[0], note.own[1]],
       q: note.q - amount,
@@ -284,7 +269,7 @@ export class ShadowpassAgentPaymentBuilder implements ShadowpassPaymentBuilder {
       memoChange,
     });
     payload.timings = { proofMs };
-    this.lastPayment = { payload, note, budgetNf };
+    this.lastPayment = { payload, note, change: witness.change, budgetNf };
     return payload;
   }
 

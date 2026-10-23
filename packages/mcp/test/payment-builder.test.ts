@@ -146,6 +146,30 @@ describe("ShadowpassAgentPaymentBuilder", () => {
     expect(builder.lastBuiltPayment).toBeUndefined();
   });
 
+  it("keeps change rho in the SDK 250-bit range across hundreds of CSPRNG runs", async () => {
+    const fixture = await createFixture();
+    await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
+    const builder = new ShadowpassAgentPaymentBuilder({
+      store: fixture.store,
+      deployment,
+      state: fixture.state,
+      blockTimestamp: async () => 1_234n,
+      maxAmount: 20n,
+      prover: {
+        async prove() { return fakeProof(); },
+        async verify() { return true; },
+      },
+    });
+    for (let index = 0; index < 200; index += 1) {
+      const payload = await builder.buildPayment(requirements(), RESOURCE);
+      const change = await decodeNoteMemo(payload.memoChange, fixture.store.boxPrivateKey);
+      expect(change).not.toBeNull();
+      expect(change!.rho).toBeLessThan(1n << 250n);
+      expect(noteCm(change!).toString()).toBe(payload.budget.cmChange);
+      expect(builder.lastBuiltPayment?.change).toEqual(change);
+    }
+  }, 15_000);
+
   it("rejects wrong assets and insufficient notes before proof generation", async () => {
     const fixture = await createFixture({ noteQ: 10n });
     await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
