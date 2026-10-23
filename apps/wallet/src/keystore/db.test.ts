@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, it } from "vitest";
-import { getViewSecret, getWrapper, listPasskeys, resetWalletDbForTests, savePasskey, saveViewSecret, saveWrapper } from "./db";
+import { getViewSecret, getWalletState, getWrapper, listPasskeys, resetWalletDbForTests, savePasskey, saveViewSecret, saveWalletState, saveWrapper } from "./db";
 
 describe("wallet IndexedDB", () => {
   beforeEach(async () => {
@@ -17,9 +17,11 @@ describe("wallet IndexedDB", () => {
       wrapped: Uint8Array.from([1, 2, 3]),
     });
     await saveViewSecret(Uint8Array.from([1, 2, 3]));
+    await saveWalletState("ledger:test", { amount: "100" });
 
     expect(await listPasskeys()).toHaveLength(1);
     expect(await getWrapper("passkey:credential-1")).toMatchObject({ kind: "passkey" });
     expect(await getViewSecret()).toEqual(Uint8Array.from([1, 2, 3]));
+    expect(await getWalletState("ledger:test")).toEqual({ amount: "100" });
   });
 });

@@ -3,6 +3,7 @@ export * from "./certs.js";
 export * from "./constants.js";
 export * from "./ctx.js";
 export * from "./deployment.js";
+export * from "./events.js";
 export * from "./keys.js";
 export * from "./mailbox.js";
 export * from "./notes.js";

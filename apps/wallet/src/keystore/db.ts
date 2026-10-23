@@ -9,10 +9,11 @@ export interface WrapperRecord {
 }
 
 const DB_NAME = "shadowpass-wallet";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const PASSKEYS = "passkeys";
 const WRAPPERS = "wrappers";
 const SECRETS = "secrets";
+const WALLET_STATE = "wallet-state";
 
 function request<T>(value: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -30,6 +31,7 @@ export async function openWalletDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(PASSKEYS)) db.createObjectStore(PASSKEYS, { keyPath: "credentialId" });
       if (!db.objectStoreNames.contains(WRAPPERS)) db.createObjectStore(WRAPPERS, { keyPath: "id" });
       if (!db.objectStoreNames.contains(SECRETS)) db.createObjectStore(SECRETS, { keyPath: "id" });
+      if (!db.objectStoreNames.contains(WALLET_STATE)) db.createObjectStore(WALLET_STATE, { keyPath: "id" });
     };
     upgrade.onsuccess = () => resolve(upgrade.result);
     upgrade.onerror = () => reject(upgrade.error ?? new Error("Unable to open IndexedDB"));
@@ -82,6 +84,19 @@ export function clearViewSecret(): Promise<void> {
   return withStore(SECRETS, "readwrite", (store) => store.delete("view")).then(() => undefined);
 }
 
+export function getWalletState<T>(id: string): Promise<T | undefined> {
+  return withStore<{ id: string; value: T } | undefined>(WALLET_STATE, "readonly", (store) => store.get(id))
+    .then((record) => record?.value);
+}
+
+export function saveWalletState<T>(id: string, value: T): Promise<string> {
+  return withStore(WALLET_STATE, "readwrite", (store) => store.put({ id, value })).then(() => id);
+}
+
+export function clearWalletState(id: string): Promise<void> {
+  return withStore(WALLET_STATE, "readwrite", (store) => store.delete(id)).then(() => undefined);
+}
+
 export async function resetWalletDbForTests(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const deletion = indexedDB.deleteDatabase(DB_NAME);
@@ -94,8 +109,8 @@ export async function resetWalletDbForTests(): Promise<void> {
 export async function inspectWalletDbForTests(): Promise<Record<string, unknown>[]> {
   const db = await openWalletDb();
   try {
-    const transaction = db.transaction([PASSKEYS, WRAPPERS, SECRETS], "readonly");
-    const stores = [PASSKEYS, WRAPPERS, SECRETS];
+    const transaction = db.transaction([PASSKEYS, WRAPPERS, SECRETS, WALLET_STATE], "readonly");
+    const stores = [PASSKEYS, WRAPPERS, SECRETS, WALLET_STATE];
     const records: Record<string, unknown>[] = [];
     for (const storeName of stores) {
       records.push(...await request(transaction.objectStore(storeName).getAll()) as Record<string, unknown>[]);

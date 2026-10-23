@@ -14,6 +14,7 @@
 | A2 电路：签发树 LeanIMT + 吊销适配 + D3/预算电路 | ✅ #2，44/44 witness、7 电路各 5/5 真实证明且全部公开输入扰动拒绝，见 `circuits/README.md` |
 | B1 SDK：五棵树同步、witness、证明、票据备忘、凭证包 | ✅ #6，20/20 单元测试通过；Anvil 集成跳过（依赖 #3/#5）；Chrome D2 真实证明约 1.6 s |
 | C1 钱包骨架：PWA、passkey + PRF、SDK key 派生、`/slot` 恢复 | 🚧 #10，等待真实 Chrome/Google 密码管理器与 Vercel 证据 |
+| C2 钱包开通与发卡：群组、注册证明、充值、配对发卡、授权树、恢复 | 🚧 #11，N1–N4 与吊销状态展示已修复；钱包 33/33、全仓测试和 Anvil 真实链 flow/Chrome 双标签页 E2E 通过；真机 MetaMask/Touch ID/Chrome+Safari 扫码与 Base Sepolia 部署待补 |
 | B2 MCP：stdio、本地密钥、配对、凭证同步、状态与收据 | 🚧 #7 第 1 步，31/31 测试通过；已落实配对秘密、主人锁定、重放防护与每次工具调用刷新；真实 `pay`/`treasury` 待 #8 与 #4/#5 |
 | B4 加密信箱：消息箱与独立备份槽、SQLite/Upstash、限流、serverless 入口 | 🚧 #9，审查修复与服务端测试通过；固定线上地址和真实 Upstash 待验收 |
 | A3 核心合约：Gate、Group、Registry、Revocations | ✅ #3，真实证明 30/30；gas 中位数：register 346,668、issue 98,604、deposit 360,961、transferBudget 479,017、execute D2 549,916、revoke 254,361 |
