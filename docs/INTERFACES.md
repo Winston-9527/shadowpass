@@ -162,6 +162,16 @@ MCP 在终端同时打印这个链接、同样内容的配对码（base64url 字
 ```
 `credential` 消息每次都带上 `pair`（第一次用于锁定主人，之后可忽略）。
 
+**主人自己的卡片记录**（钱包 → 主人自己的信箱，用于换设备后恢复授权树）：
+```json
+{ "type": "owner_card", "seq": 7, "cardId": "<cert1.hash>", "card": { "name": "..", "agentPk": {..}, "agentBox": "..", "cap": "1", "expiry": "..", "cert": { /* cert1 */ }, "status": "delivered" } }
+{ "type": "owner_root", "seq": 1, "cert0": { /* 完整 cert0，含 expiry 和签名 */ } }
+```
+- **一张卡一条消息**，不要把所有卡打包成一个快照（打包后会超过信箱 16 KiB 的单条上限）。
+- `seq` 是钱包本地单调递增的序号。恢复时**按 `cardId` 合并**，同一张卡取 `seq` 最大的那条，绝不能用一条消息整体覆盖本地数据。
+- 恢复出来的每张卡都要和链上核对：`cert1.hash` 已签发（`Issued` 事件），签名有效，状态以链上为准（是否被吊销）。核对不过的丢弃。
+- 信箱只保留 30 天，所以这些记录只用于加速恢复。权威来源是链上：`owner_root` 丢失时，用 §13 的种子恢复，再按 §11 扫描 `NoteMemo` 找回管家名下的票据。
+
 Agent 用 `delegate` 创建子 Agent 时，向主人信箱发送 `{"type": "delegated", "parent": "<hash>", "cert": {...}}`，主人钱包据此显示授权树，并用于祖先吊销（工单 A2）。每笔付款后发送 `{"type": "receipt", "budgetNf": "..", "tx": "..", "resource": "..", "amount": ".."}`。收据只用于展示，以链上解密为准。
 
 ## 8. x402 `shadowpass` scheme
