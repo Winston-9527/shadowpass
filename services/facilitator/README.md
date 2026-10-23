@@ -12,7 +12,8 @@ npm run start -w @shadowpass/facilitator
 ```
 
 `SHADOWPASS_NETWORK` selects `deployments/<network>.json`; `PORT`, `ANVIL_RPC_URL`, `BASE_SEPOLIA_RPC`
-and `FACILITATOR_RATE_LIMIT` are read from the environment. Never commit `.env` or a private key.
+and `FACILITATOR_RATE_LIMIT` are read from the environment. `PAYMENT_RATE_LIMIT`, `RELAY_RATE_LIMIT`
+and `RELAY_FAUCET_PER_DAY` control the in-memory IP limits. Never commit `.env` or a private key.
 
 ## Endpoints
 
@@ -21,8 +22,8 @@ See `docs/INTERFACES.md` §14. `POST /relay/:action` supports `join`, `register`
 rate-limited by IP, and returns only sanitized error codes. `faucetDeposit` is limited to once per IP per day.
 Latency breakdowns are available at `GET /metrics`.
 
-For Vercel, expose `createFacilitatorApp()` from a serverless entrypoint and bind the same environment
-variables in the project settings. The demo can also run on any Node 24 host.
+This demo must run as a **single long-lived Node 24 process**. Do not deploy the facilitator to a
+multi-instance or serverless target until the lock, rate limits and nonce queue move to shared storage.
 
 ## Demo limits
 

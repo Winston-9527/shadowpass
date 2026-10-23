@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ContractFunctionRevertedError, encodeErrorResult } from "viem";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { ctxHash, type Deployment } from "@shadowpass/sdk";
 import {
@@ -9,6 +10,8 @@ import {
   assembleShadowpassPayload,
   checkPayment,
   createSerializedSender,
+  revertName,
+  shadowErrorAbi,
   type GateClient,
   type PaymentChainView,
   type Roots,
@@ -84,11 +87,12 @@ function payment(memoChange: `0x${string}` = "0x01", budgetNf = "22", roots?: Ro
   };
 }
 
-function chainView(registered = true): PaymentChainView & { register: () => void } {
+function chainView(registered = true, validRoots = true): PaymentChainView & { register: () => void } {
   let state = registered;
   return {
     deployment: DEPLOYMENT,
     async blockTimestamp() { return 1_000; },
+    async rootsAccepted() { return validRoots; },
     async isStateRegistered() { return state; },
     register() { state = true; },
   };
@@ -232,6 +236,22 @@ describe("facilitator settlement", () => {
     expect(gate.registrations).toHaveLength(1);
   });
 
+  it("never registers roots that the chain does not accept", async () => {
+    const view = chainView(false, false);
+    const gate = gateClient(view);
+    const facilitator = new ShadowpassFacilitatorCore({
+      gateClient: gate,
+      chainView: view,
+      signers: [MERCHANT],
+    });
+    await expect(facilitator.settle(payment(), requirements())).resolves.toMatchObject({
+      success: false,
+      errorReason: "invalid_payload",
+    });
+    expect(gate.registrations).toHaveLength(0);
+    expect(gate.sent).toBe(0);
+  });
+
   it("serializes concurrent settle for the same budgetNf", async () => {
     const view = chainView();
     const gate = gateClient(view);
@@ -310,5 +330,15 @@ describe("schemas and serialized sender", () => {
       }),
     ]);
     expect(maxActive).toBe(1);
+  });
+
+  it("decodes a real viem ContractFunctionRevertedError", () => {
+    const data = encodeErrorResult({ abi: shadowErrorAbi, errorName: "BadClock" });
+    const error = new ContractFunctionRevertedError({
+      abi: shadowErrorAbi,
+      data,
+      functionName: "execute",
+    });
+    expect(revertName(error)).toBe("BadClock");
   });
 });

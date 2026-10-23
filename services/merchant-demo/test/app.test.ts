@@ -1,7 +1,8 @@
 import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
+import { encodePaymentSignatureHeader } from "@x402/core/http";
 import type { Deployment } from "@shadowpass/sdk";
-import { createMerchantApp } from "../src/app.js";
+import { createMerchantApp, validatePaymentResource } from "../src/app.js";
 
 const deployment: Deployment = {
   chainId: 84532,
@@ -33,6 +34,25 @@ afterEach(() => {
 });
 
 describe("merchant demo", () => {
+  it("binds the signed resource URL to the actual protected URL", () => {
+    const header = encodePaymentSignatureHeader({
+      x402Version: 2,
+      resource: { url: "https://merchant.example/report" },
+      accepted: {
+        scheme: "shadowpass",
+        network: "eip155:84532",
+        asset: deployment.token,
+        amount: "2000000",
+        payTo: "0x000000000000000000000000000000000000cafe",
+        maxTimeoutSeconds: 120,
+        extra: {},
+      },
+      payload: {},
+    });
+    expect(validatePaymentResource(header, "https://merchant.example/report")).toBe(true);
+    expect(validatePaymentResource(header, "https://merchant.example/news")).toBe(false);
+  });
+
   it("keeps health available and returns an explicit 503 when the facilitator is down", async () => {
     const originalError = console.error;
     console.error = () => {};

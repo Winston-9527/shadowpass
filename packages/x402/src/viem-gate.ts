@@ -1,6 +1,7 @@
 import {
   encodeAbiParameters,
   keccak256,
+  parseAbi,
   type Address,
   type Hex,
   type PublicClient,
@@ -15,6 +16,34 @@ import type {
   TransactionResult,
 } from "./types.js";
 
+export const shadowErrorAbi = parseAbi([
+  "error NotAdmin()",
+  "error AdapterNotAllowed()",
+  "error StaleIssuedRoot()",
+  "error StaleRevokedRoot()",
+  "error UnregisteredRootRoot()",
+  "error BadClock()",
+  "error UnknownMethod()",
+  "error TargetMismatch()",
+  "error InvalidProof()",
+  "error BadField()",
+  "error BadCiphertextLength()",
+  "error StaleNoteRoot()",
+  "error BudgetSpent()",
+  "error AmountMismatch()",
+  "error UnknownState()",
+  "error MemoTooLong()",
+  "error TokenTransferFailed()",
+  "error ZeroAddress()",
+  "error ZeroAmount()",
+  "error FaucetLimit()",
+  "error UnknownGroupRoot()",
+  "error AlreadyRegistered()",
+  "error LeafRetired()",
+  "error NotGate()",
+  "error ZeroPayTo()",
+] as const);
+
 const proofComponents = [
   { name: "a", type: "uint256[2]" },
   { name: "b", type: "uint256[2][2]" },
@@ -22,6 +51,7 @@ const proofComponents = [
 ] as const;
 
 const gateAbi = [
+  ...shadowErrorAbi,
   {
     type: "function",
     name: "execute",
@@ -73,6 +103,20 @@ const gateAbi = [
   },
   {
     type: "function",
+    name: "issuedRootAccepted",
+    stateMutability: "view",
+    inputs: [{ name: "root", type: "uint256" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "clockSkew",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint64" }],
+  },
+  {
+    type: "function",
     name: "registerState",
     stateMutability: "nonpayable",
     inputs: [
@@ -83,6 +127,14 @@ const gateAbi = [
     outputs: [{ name: "stateRoot", type: "uint256" }],
   },
 ] as const;
+
+const registryAbi = parseAbi([
+  "function rootAccepted(uint256 candidate) view returns (bool)",
+] as const);
+
+const revocationsAbi = parseAbi([
+  "function rootAccepted(uint256 candidate) view returns (bool)",
+] as const);
 
 export class TransactionRevertedError extends Error {
   constructor(readonly transaction: Hex) {
@@ -153,6 +205,14 @@ export class ViemGateClient implements GateClient, PaymentChainView {
     return Number((await this.publicClient.getBlock({ blockTag: "latest" })).timestamp);
   }
 
+  async clockSkewSeconds(): Promise<number> {
+    return Number(await this.publicClient.readContract({
+      address: this.deployment.gate,
+      abi: gateAbi,
+      functionName: "clockSkew",
+    }));
+  }
+
   async isStateRegistered(roots: Roots): Promise<boolean> {
     const key = keccak256(encodeAbiParameters(
       [{ type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
@@ -165,6 +225,30 @@ export class ViemGateClient implements GateClient, PaymentChainView {
       args: [key],
     });
     return stateRoot !== 0n;
+  }
+
+  async rootsAccepted(roots: Roots): Promise<boolean> {
+    const [issued, revoked, registeredRoot] = await Promise.all([
+      this.publicClient.readContract({
+        address: this.deployment.gate,
+        abi: gateAbi,
+        functionName: "issuedRootAccepted",
+        args: [BigInt(roots.issued)],
+      }),
+      this.publicClient.readContract({
+        address: this.deployment.revocations,
+        abi: revocationsAbi,
+        functionName: "rootAccepted",
+        args: [BigInt(roots.revoked)],
+      }),
+      this.publicClient.readContract({
+        address: this.deployment.registry,
+        abi: registryAbi,
+        functionName: "rootAccepted",
+        args: [BigInt(roots.root)],
+      }),
+    ]);
+    return issued && revoked && registeredRoot;
   }
 
   async simulateExecute(payload: ShadowpassPayload): Promise<void> {

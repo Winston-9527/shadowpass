@@ -65,6 +65,8 @@ export interface ShadowpassPaymentBuilder {
 export interface PaymentChainView {
   deployment: Deployment;
   blockTimestamp(): Promise<number>;
+  clockSkewSeconds?(): Promise<number>;
+  rootsAccepted(roots: Roots): Promise<boolean>;
   isStateRegistered(roots: Roots): Promise<boolean>;
 }
 
@@ -110,7 +112,7 @@ export const RELAY_ACTIONS = [
 export interface RelayResult {
   transaction: Hex;
   blockNumber: string;
-  logs: Array<Record<string, string>>;
+  logs: Array<Record<string, string | string[]>>;
 }
 
 export interface WalletRelayClient {

@@ -19,6 +19,7 @@ export interface FacilitatorConfig {
     faucetPerDay?: number;
     trustProxyHeaders?: boolean;
   };
+  paymentRateLimit?: { perMinute?: number };
 }
 
 export async function startFacilitator(config: FacilitatorConfig): Promise<{
@@ -52,6 +53,9 @@ export async function startFacilitator(config: FacilitatorConfig): Promise<{
       faucetPerDay: config.relayRateLimit?.faucetPerDay,
       trustProxyHeaders: config.relayRateLimit?.trustProxyHeaders,
     },
+    paymentRateLimit: {
+      perMinute: config.paymentRateLimit?.perMinute,
+    },
   });
   const server = await new Promise<Server>((resolve) => {
     const listening = app.listen(config.port ?? 4022, () => resolve(listening));
@@ -84,6 +88,9 @@ export async function main(): Promise<void> {
       perMinute: Number(process.env.RELAY_RATE_LIMIT ?? 60),
       faucetPerDay: Number(process.env.RELAY_FAUCET_PER_DAY ?? 1),
       trustProxyHeaders: process.env.VERCEL === "1" || process.env.TRUST_PROXY_HEADERS === "1",
+    },
+    paymentRateLimit: {
+      perMinute: Number(process.env.PAYMENT_RATE_LIMIT ?? 120),
     },
   });
   console.log(JSON.stringify({

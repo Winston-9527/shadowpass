@@ -18,7 +18,10 @@ const relaySchemas = {
     siblingNodes: z.array(uintSchema),
   }).strict(),
   faucetDeposit: z.object({
-    proof: proofSchema, cm: uintSchema, q: uintSchema, memo: hexSchema,
+    proof: proofSchema,
+    cm: uintSchema,
+    q: uintSchema.refine((value) => BigInt(value) > 0n && BigInt(value) <= 100_000_000n, "invalid_faucet_amount"),
+    memo: hexSchema,
   }).strict(),
   issue: z.object({ certHash: uintSchema }).strict(),
   transferBudget: z.object({
@@ -65,6 +68,23 @@ export class RelayRateLimiter {
   }
 }
 
+export class PaymentRateLimiter {
+  private readonly hits = new Map<string, number[]>();
+  constructor(
+    private readonly limit: number,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  allow(ip: string): boolean {
+    const now = this.now();
+    const recent = (this.hits.get(ip) ?? []).filter((timestamp) => timestamp > now - 60_000);
+    if (recent.length >= this.limit) return false;
+    recent.push(now);
+    this.hits.set(ip, recent);
+    return true;
+  }
+}
+
 function clientIp(request: Request, trustProxyHeaders: boolean): string {
   if (trustProxyHeaders) {
     const header = request.headers["x-real-ip"];
@@ -82,6 +102,7 @@ export interface FacilitatorAppOptions {
   relay: WalletRelayClient;
   metrics: InMemoryLatencyRecorder;
   relayRateLimit?: Partial<RelayRateLimitConfig>;
+  paymentRateLimit?: { perMinute?: number };
   now?: () => number;
 }
 
@@ -102,12 +123,20 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
     faucetPerDay: options.relayRateLimit?.faucetPerDay ?? 1,
     trustProxyHeaders,
   }, options.now);
+  const paymentLimiter = new PaymentRateLimiter(
+    options.paymentRateLimit?.perMinute ?? 120,
+    options.now,
+  );
 
   app.get("/supported", (_request, response) => response.json(options.facilitator.getSupported()));
   app.get("/health", (_request, response) => response.json({ ok: true }));
   app.get("/metrics", (_request, response) => response.json({ records: options.metrics.list() }));
 
   app.post("/verify", asyncHandler(async (request, response) => {
+    if (!paymentLimiter.allow(clientIp(request, trustProxyHeaders))) {
+      response.status(429).json({ error: "rate_limited" });
+      return;
+    }
     const body = verifyBodySchema.parse(request.body);
     const started = performance.now();
     let result: any;
@@ -121,7 +150,6 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
       totalMs: performance.now() - started,
       verifyMs: result?.extra?.shadowpass?.verifyMs,
       proofMs: result?.extra?.shadowpass?.proofMs,
-      budgetNf: String((body.paymentPayload as any)?.payload?.budget?.budgetNf ?? ""),
       network: String(body.paymentRequirements.network ?? ""),
       timestamp: new Date().toISOString(),
     });
@@ -129,6 +157,10 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
   }));
 
   app.post("/settle", asyncHandler(async (request, response) => {
+    if (!paymentLimiter.allow(clientIp(request, trustProxyHeaders))) {
+      response.status(429).json({ error: "rate_limited" });
+      return;
+    }
     const body = verifyBodySchema.parse(request.body);
     const started = performance.now();
     let result: any;
@@ -147,7 +179,6 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
       totalMs: performance.now() - started,
       settleMs: result?.extra?.shadowpass?.settleMs,
       proofMs: result?.extra?.shadowpass?.proofMs,
-      budgetNf: String((body.paymentPayload as any)?.payload?.budget?.budgetNf ?? ""),
       transaction: result?.transaction || undefined,
       network: result?.network,
       timestamp: new Date().toISOString(),
@@ -180,7 +211,7 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
   }));
 
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
-    if (error instanceof z.ZodError) {
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
       response.status(400).json({ error: "invalid_request" });
       return;
     }

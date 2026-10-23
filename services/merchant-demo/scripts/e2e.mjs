@@ -62,6 +62,7 @@ const state = {
 const gateClient = {
   deployment,
   async blockTimestamp() { return Math.floor(Date.now() / 1000); },
+  async rootsAccepted() { return true; },
   async isStateRegistered() { return state.registered; },
   async registerState() {
     state.registerCalls += 1;

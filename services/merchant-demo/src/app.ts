@@ -1,6 +1,12 @@
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from "express";
-import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
-import { paymentMiddleware } from "@x402/express";
+import {
+  HTTPFacilitatorClient,
+  x402HTTPResourceServer,
+  x402ResourceServer,
+  type RoutesConfig,
+} from "@x402/core/server";
+import { decodePaymentSignatureHeader } from "@x402/core/http";
+import { paymentMiddlewareFromHTTPServer } from "@x402/express";
 import type { Address, Deployment } from "@shadowpass/sdk";
 import { ShadowpassServerScheme } from "@shadowpass/x402";
 
@@ -9,6 +15,15 @@ export interface MerchantDemoOptions {
   deployment: Deployment;
   asset: Address;
   merchantPayTo: Address;
+}
+
+export function validatePaymentResource(header: string, actualUrl: string): boolean {
+  try {
+    const payment = decodePaymentSignatureHeader(header);
+    return payment.resource?.url === actualUrl;
+  } catch {
+    return false;
+  }
 }
 
 function unavailableHandler(handler: RequestHandler): RequestHandler {
@@ -35,7 +50,7 @@ export function createMerchantApp(options: MerchantDemoOptions) {
     decimals: 6,
   }));
 
-  const middleware = paymentMiddleware({
+  const routes: RoutesConfig = {
     "GET /report": {
       accepts: [{
         scheme: "shadowpass",
@@ -60,10 +75,25 @@ export function createMerchantApp(options: MerchantDemoOptions) {
       description: "News feed",
       mimeType: "application/json",
     },
-  }, resourceServer, undefined, undefined, false);
+  };
+  const httpServer = new x402HTTPResourceServer(resourceServer, routes).onProtectedRequest(
+    async (context) => {
+      const header = context.adapter.getHeader("payment-signature");
+      if (!header) return;
+      if (!validatePaymentResource(header, context.adapter.getUrl())) {
+        return { abort: true, reason: "resource_url_mismatch" };
+      }
+    },
+  );
+  const middleware = paymentMiddlewareFromHTTPServer(
+    httpServer,
+    undefined,
+    undefined,
+    false,
+  );
 
   let initError: unknown;
-  const ready = resourceServer.initialize().catch((error: unknown) => {
+  const ready = httpServer.initialize().catch((error: unknown) => {
     initError = error;
   });
   const protectedMiddleware: RequestHandler = async (request, response, next) => {

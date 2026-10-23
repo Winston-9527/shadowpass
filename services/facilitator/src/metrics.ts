@@ -5,7 +5,6 @@ export interface LatencyRecord {
   simulationMs?: number;
   settleMs?: number;
   proofMs?: number;
-  budgetNf?: string;
   transaction?: string;
   network?: string;
   timestamp: string;

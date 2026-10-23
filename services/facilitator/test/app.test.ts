@@ -152,4 +152,32 @@ describe("facilitator HTTP service", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "simulation_failed:FaucetLimit" });
   });
+
+  it("rate limits verify and settle by client IP", async () => {
+    const app = createFacilitatorApp({
+      facilitator: {
+        getSupported: () => ({ kinds: [], extensions: [], signers: {} }),
+        verify: async () => ({ isValid: true }),
+        settle: async () => ({ success: true, transaction: "0x05", network: "eip155:84532" }),
+      },
+      relay,
+      metrics: new InMemoryLatencyRecorder(),
+      relayRateLimit: { trustProxyHeaders: true },
+      paymentRateLimit: { perMinute: 1 },
+    });
+    const server = app.listen(0, "127.0.0.1");
+    servers.push(server);
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("listen failed");
+    const base = `http://127.0.0.1:${address.port}`;
+    const headers = { "content-type": "application/json", "x-real-ip": "203.0.113.9" };
+    const body = JSON.stringify({
+      x402Version: 2,
+      paymentPayload: { payload: { budget: { budgetNf: "1" } } },
+      paymentRequirements: { network: "eip155:84532" },
+    });
+    expect((await fetch(`${base}/verify`, { method: "POST", headers, body })).status).toBe(200);
+    expect((await fetch(`${base}/settle`, { method: "POST", headers, body })).status).toBe(429);
+  });
 });

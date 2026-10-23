@@ -182,6 +182,7 @@ export async function checkPayment(
   if (nowTs > chainNow || chainNow - nowTs > skew) {
     return invalid("stale");
   }
+  if (!(await chainView.rootsAccepted(payload.roots))) return invalid("invalid_payload");
   if (!(await chainView.isStateRegistered(payload.roots))) return invalid("unknown_state");
   return { isValid: true, payer: "shadowpass-pool" };
 }
@@ -223,7 +224,7 @@ export class ShadowpassFacilitatorCore {
       requirements,
       resourceUrl,
       this.chainView,
-      { clockSkewSeconds: this.clockSkewSeconds },
+      { clockSkewSeconds: await this.effectiveClockSkew() },
     );
     if (!checked.isValid) return checked;
     const parsed = ShadowpassPayloadSchema.parse(payment.payload);
@@ -254,7 +255,7 @@ export class ShadowpassFacilitatorCore {
       requirements,
       resourceUrl,
       this.chainView,
-      { clockSkewSeconds: this.clockSkewSeconds },
+      { clockSkewSeconds: await this.effectiveClockSkew() },
     );
     if (checked.invalidReason === "unknown_state") {
       const parsedForState = ShadowpassPayloadSchema.parse(payment.payload);
@@ -264,20 +265,21 @@ export class ShadowpassFacilitatorCore {
         requirements,
         resourceUrl,
         this.chainView,
-        { clockSkewSeconds: this.clockSkewSeconds },
+        { clockSkewSeconds: await this.effectiveClockSkew() },
       );
     }
     if (!checked.isValid) return this.failed(checked.invalidReason ?? "invalid_payload", requirements.network);
 
     const parsed = ShadowpassPayloadSchema.parse(payment.payload);
-    if (!this.rateLimiter.allow(requirements.payTo)) {
-      return this.failed("merchant_rate_limited", requirements.network);
-    }
     const token = this.lock.beginSettle(parsed.budget.budgetNf);
     if (!token) return this.failed("nullifier_pending", requirements.network);
     const started = performance.now();
     try {
       await this.gateClient.simulateExecute(parsed);
+      if (!this.rateLimiter.allow(requirements.payTo)) {
+        this.lock.release(parsed.budget.budgetNf, token);
+        return this.failed("merchant_rate_limited", requirements.network);
+      }
       const receipt = await this.gateClient.sendExecute(parsed);
       this.lock.settle(parsed.budget.budgetNf, token);
       return {
@@ -313,6 +315,10 @@ export class ShadowpassFacilitatorCore {
     } finally {
       this.stateRegistrations.delete(key);
     }
+  }
+
+  private async effectiveClockSkew(): Promise<number> {
+    return await this.chainView.clockSkewSeconds?.() ?? this.clockSkewSeconds;
   }
 
   private failed(errorReason: string, network: Network): SettleResponse {

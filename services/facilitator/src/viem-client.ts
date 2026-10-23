@@ -13,26 +13,27 @@ import type { Deployment } from "@shadowpass/sdk";
 import {
   createSerializedSender,
   revertName,
+  shadowErrorAbi,
   type RelayAction,
   type RelayResult,
   type WalletRelayClient,
 } from "@shadowpass/x402";
 
-const groupAbi = parseAbi(["function join(uint256 commitment)"] as const);
-const registryAbi = parseAbi([
+const groupAbi = [...shadowErrorAbi, ...parseAbi(["function join(uint256 commitment)"] as const)] as const;
+const registryAbi = [...shadowErrorAbi, ...parseAbi([
   "function register((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 groupRoot,uint256 nf,uint256 leaf0,uint256[] siblingNodes)",
-] as const);
-const tokenAbi = parseAbi([
+] as const)] as const;
+const tokenAbi = [...shadowErrorAbi, ...parseAbi([
   "function faucetDeposit((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 cm,uint256 q,bytes memo)",
-] as const);
-const gateAbi = parseAbi([
+] as const)] as const;
+const gateAbi = [...shadowErrorAbi, ...parseAbi([
   "function issue(uint256 certHash)",
   "function transferBudget((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 noteRoot,uint256 revokedRoot,uint256 nullifier,uint256 cm1,uint256 cm2,bytes memo1,bytes memo2)",
   "function registerState(uint256 issued,uint256 revoked,uint256 root) returns (uint256)",
-] as const);
-const revocationsAbi = parseAbi([
+] as const)] as const;
+const revocationsAbi = [...shadowErrorAbi, ...parseAbi([
   "function revoke((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 newRoot,uint256 entry)",
-] as const);
+] as const)] as const;
 
 export interface ViemAccounts {
   publicClient: PublicClient;
@@ -83,7 +84,7 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
       blockNumber: receipt.blockNumber.toString(),
       logs: receipt.logs.map((log: any) => ({
         address: String(log.address),
-        topics: Array.isArray(log.topics) ? log.topics.join(",") : "",
+        topics: Array.isArray(log.topics) ? log.topics.map(String) : [],
         data: String(log.data),
         logIndex: String(log.logIndex),
         transactionHash: String(log.transactionHash),
