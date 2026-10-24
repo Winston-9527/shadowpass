@@ -12,6 +12,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import type { Deployment } from "@shadowpass/sdk";
 import {
   createSerializedSender,
+  gateAbi as x402GateAbi,
   revertName,
   shadowErrorAbi,
   type RelayAction,
@@ -31,9 +32,6 @@ const gateAbi = [...shadowErrorAbi, ...parseAbi([
   "function transferBudget((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 noteRoot,uint256 revokedRoot,uint256 nullifier,uint256 cm1,uint256 cm2,bytes memo1,bytes memo2)",
   "function registerState(uint256 issued,uint256 revoked,uint256 root) returns (uint256)",
 ] as const)] as const;
-const executeAbi = [...shadowErrorAbi, ...parseAbi([
-  "function execute((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,(uint256 issued,uint256 revoked,uint256 root) roots,uint64 nowTs,(address target,bytes4 method,uint256 amount,uint256 nonce,bytes params) action,uint256[] ct,(uint256 noteRoot,uint256 budgetNf,uint256 cmChange,uint256 qSpent) budget,bytes memoChange)",
-] as const)] as any;
 const treasuryAbi = [...shadowErrorAbi, ...parseAbi([
   "function withdraw(uint256 positionId)",
 ] as const)] as const;
@@ -359,7 +357,7 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
             () => options.publicClient.simulateContract({
               account,
               address: options.deployment.gate,
-              abi: executeAbi,
+              abi: x402GateAbi as any,
               functionName: "execute",
               args: callArgs as any,
             }),
@@ -367,7 +365,7 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
               account,
               chain: null,
               address: options.deployment.gate,
-              abi: executeAbi,
+              abi: x402GateAbi as any,
               functionName: "execute",
               args: callArgs as any,
             }),

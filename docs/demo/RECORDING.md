@@ -28,10 +28,10 @@ node scripts/demo/ui-check.mjs
 - 文件：`docs/demo/demo.webm`
 - 桌面截图：`docs/demo/desktop.png`
 - 手机截图：`docs/demo/mobile.png`
-- 时长：33.44 秒，分辨率 1440 x 900，VP9。
-- SHA-256：`55b5baccb3afa9b51ae745b73242dd183944d8e2232f0f2c26c25c4d2d5e28b9`
+- 时长：24.24 秒，分辨率 1440 x 900，VP9。
+- SHA-256：`af74f36c4231ba9b5f6c26463c2dedc12dd237f413938856a934046a21a6f7ce`
 - 生成时间：2026-10-24；脚本内五段字幕与协议层演示步骤一致。
-- 交互耗时：33.578 秒；能力检查显示真实 `CapSubset` 拒绝，采购和理财状态最终分别为“已执行”“已赎回”。
+- 交互耗时：25.751 秒；能力检查显示真实 `CapSubset` 拒绝，采购和理财状态最终分别为“已执行”“已赎回”。
 
 ## 播放前检查
 

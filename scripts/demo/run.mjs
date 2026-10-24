@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,7 @@ const RPC_URL = process.env.ANVIL_RPC_URL ?? `http://127.0.0.1:${RPC_PORT}`;
 const DEPLOYER_PK = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const FACILITATOR_PK = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const MERCHANT_PAY_TO = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
+const FACILITATOR_METRICS_TOKEN = crypto.randomUUID();
 const ownerCiphertextAbi = parseAbi([
   "event OwnerCiphertext(uint256 indexed budgetNf,uint256[] ct)",
 ]);
@@ -139,6 +141,7 @@ async function startServices(deployment) {
     relayRateLimit: { perMinute: 500, faucetPerDay: 200, trustProxyHeaders: false },
     paymentRateLimit: { perMinute: 500 },
     merchantRateLimit: { limit: 500, windowMs: 60_000 },
+    metricsToken: FACILITATOR_METRICS_TOKEN,
   });
   facilitatorServer = facilitator.server;
   const facilitatorBinding = facilitatorServer.address();
@@ -156,7 +159,12 @@ async function startServices(deployment) {
   const merchantPort = Number(process.env.SHADOWPASS_MERCHANT_PORT ?? (e2e ? 0 : 4021));
   const listener = await listen(merchant.app, merchantPort);
   merchantServer = listener.server;
-  return { facilitatorUrl, merchantUrl: listener.url, facilitatorAddress };
+  return {
+    facilitatorUrl,
+    merchantUrl: listener.url,
+    facilitatorAddress,
+    facilitatorMetricsToken: FACILITATOR_METRICS_TOKEN,
+  };
 }
 
 async function startDemo(engine) {
@@ -324,6 +332,7 @@ try {
     manifestHashes: artifacts.manifestHashes,
     merchantUrl: services.merchantUrl,
     facilitatorUrl: services.facilitatorUrl,
+    facilitatorMetricsToken: services.facilitatorMetricsToken,
     facilitatorAddress: services.facilitatorAddress,
     merchantPayTo: MERCHANT_PAY_TO,
     deployerPrivateKey: DEPLOYER_PK,

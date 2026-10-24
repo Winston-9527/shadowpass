@@ -120,6 +120,7 @@ export class DemoEngine {
     this.rpcUrl = options.rpcUrl;
     this.merchantUrl = options.merchantUrl;
     this.facilitatorUrl = options.facilitatorUrl;
+    this.facilitatorMetricsToken = options.facilitatorMetricsToken;
     this.facilitatorAddress = options.facilitatorAddress;
     this.merchantPayTo = options.merchantPayTo;
     this.artifactDir = options.artifactDir;
@@ -668,7 +669,9 @@ export class DemoEngine {
     this.notes.buyer = this.pendingPurchase.note;
     await this.sync();
     ensure(this.state.notes.leaves.includes(noteCm(this.notes.buyer)), "purchase change note was not inserted");
-    const metrics = await fetch(`${this.facilitatorUrl}/metrics`).then((item) => item.json());
+    const metrics = await fetch(`${this.facilitatorUrl}/metrics`, {
+      headers: { authorization: `Bearer ${this.facilitatorMetricsToken}` },
+    }).then((item) => item.json());
     const settlement = [...metrics.records].reverse().find((record) => record.operation === "settle" && record.transaction);
     const ownerView = await this.ownerViewFromChain(this.pendingPurchase.budgetNf, settlement?.transaction);
     const record = {
