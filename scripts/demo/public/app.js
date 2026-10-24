@@ -87,8 +87,12 @@ function render() {
   setText("#return-cm", data.position?.returnCm ? short(data.position.returnCm) : "待生成");
   setText("#simulated-deposits", formatAmount(data.anonymity.simulatedDeposits));
   setText("#registered-identities", String(data.anonymity.registeredIdentities));
+  setText("#privacy-note-set", String(data.anonymity.noteSetSize));
+  setText("#privacy-identity-set", String(data.anonymity.registeredIdentities));
   setText("#gate-address", data.network.gate);
   setText("#merchant-url", data.network.merchantUrl);
+  renderSetDots("#privacy-note-dots", data.anonymity.noteSetSize);
+  renderSetDots("#privacy-identity-dots", data.anonymity.registeredIdentities);
 
   const purchaseButton = $('[data-action="purchase"]');
   purchaseButton.disabled = state.busy.has("purchase") || BigInt(data.story.branches.buyer.budget) < 2_000_000n;
@@ -99,6 +103,15 @@ function render() {
 
   renderLedger(data.actions);
   renderComparison(data);
+}
+
+function renderSetDots(selector, value) {
+  const container = $(selector);
+  if (!container) return;
+  const count = Math.max(0, Number(value) || 0);
+  const visible = Math.min(count, 32);
+  container.innerHTML = Array.from({ length: visible }, () => '<span class="set-dot"></span>').join("")
+    + (count > visible ? `<small>+${count - visible}</small>` : "");
 }
 
 function renderLedger(actions) {
@@ -130,6 +143,7 @@ function renderComparison(data) {
   const comparison = state.comparison === "treasury" ? data.comparisonTreasury : data.comparison;
   const shadowpass = comparison.shadowpass;
   const session = comparison.sessionKey;
+  const receipt = comparison.receipt;
   setText("#shadowpass-compare-title", shadowpass.title);
   setText("#session-compare-title", session.title);
   setText("#shadowpass-action", `${comparison.action}${comparison.transaction ? ` · ${short(comparison.transaction)}` : " · 等待上链"}`);
@@ -140,6 +154,39 @@ function renderComparison(data) {
   fillList("#session-visible", session.visible);
   fillList("#session-hidden", session.hidden);
   fillList("#session-events", session.onchain);
+  renderPrivacyReceipt(receipt);
+}
+
+function renderPrivacyReceipt(receipt) {
+  const live = Boolean(receipt?.transaction);
+  const state = $("#receipt-state");
+  state.textContent = live ? "ON-CHAIN" : "WAITING";
+  state.classList.toggle("live", live);
+  setText("#receipt-unknown-identity", live ? "未关联到 Alice" : "等待交易");
+  setText("#receipt-tx", live ? short(receipt.transaction) : "--");
+  $("#receipt-tx").title = receipt?.transaction ?? "";
+  setText("#receipt-executor", receipt?.executor ? short(receipt.executor) : "--");
+  $("#receipt-executor").title = receipt?.executor ?? "";
+  setText("#receipt-amount", receipt?.amount === undefined ? "--" : formatAmount(receipt.amount));
+  setText("#receipt-payee", receipt?.payee ? short(receipt.payee) : "--");
+  $("#receipt-payee").title = receipt?.payee ?? "";
+  setText("#receipt-target", receipt?.target ? short(receipt.target) : "--");
+  $("#receipt-target").title = receipt?.target ?? "";
+  setText("#receipt-method", receipt?.method ? short(receipt.method) : "--");
+  $("#receipt-method").title = receipt?.method ?? "";
+  setText("#receipt-nullifier", receipt?.nullifier ? short(receipt.nullifier, 18) : "--");
+  $("#receipt-nullifier").title = receipt?.nullifier ?? "";
+  setText(
+    "#receipt-ciphertext",
+    receipt?.ciphertext?.segments
+      ? `${receipt.ciphertext.segments} 段 · ${short(receipt.ciphertext.preview, 22)}`
+      : "--",
+  );
+  setText("#receipt-proof", receipt?.proofMs ? `${Math.round(receipt.proofMs)} ms` : "--");
+  const chain = $("#receipt-owner-chain");
+  chain.innerHTML = receipt?.ownerView?.length
+    ? receipt.ownerView.map((name, index) => `${index ? '<i>→</i>' : ''}<span>${escapeHtml(name)}</span>`).join("")
+    : "<span>等待交易</span>";
 }
 
 async function runAction(action) {

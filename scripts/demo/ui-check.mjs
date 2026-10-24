@@ -106,6 +106,12 @@ try {
     BigInt(amount) >= 5_000_000n && BigInt(amount) <= 100_000_000n
   )), "simulated deposit amounts are outside 5-100 spUSD");
   ensure((await text(page.locator("#simulated-deposits"))).endsWith("spUSD"), "simulated deposit total is missing");
+  ensure((await text(page.locator("#privacy-note-set"))) === String(simulated.anonymity.noteSetSize), "privacy note set is missing");
+  ensure((await text(page.locator("#privacy-identity-set"))) === "1", "identity anonymity limitation is missing");
+  ensure(
+    await page.locator("#privacy-note-dots .set-dot").count() === Math.min(simulated.anonymity.noteSetSize, 32),
+    "privacy note dots do not match the anonymity set",
+  );
   await assertNoHorizontalOverflow(page, "desktop initial view");
   await caption(page, "1 / 5  20 个模拟用户只扩展票据层匿名集；身份层匿名集仍为 1");
   await page.waitForTimeout(3_000);
@@ -120,6 +126,11 @@ try {
   await page.locator('[data-action="purchase"]').click();
   await waitForText(page, "#purchase-status", "已执行");
   ensure((await text(page.locator("#ledger"))).includes("采购 Agent 通过 x402 购买市场报告"), "purchase receipt is missing");
+  ensure((await text(page.locator("#receipt-state"))) === "ON-CHAIN", "privacy receipt did not activate");
+  ensure((await text(page.locator("#receipt-tx"))).startsWith("0x"), "privacy receipt transaction is missing");
+  ensure((await text(page.locator("#receipt-method"))).startsWith("0x"), "privacy receipt method is missing");
+  ensure((await text(page.locator("#receipt-owner-chain"))).includes("采购 Agent"), "owner-only chain is missing");
+  ensure((await text(page.locator("#receipt-unknown-identity"))).includes("未关联"), "public payer anonymity is not explicit");
   await caption(page, "Alice 用查看钥解密委托链，商家和观察者只看到池内承诺");
   await page.waitForTimeout(2_000);
   await page.locator(".comparison-section").scrollIntoViewIfNeeded();
@@ -136,6 +147,7 @@ try {
   ensure((await text(page.locator("#return-cm"))) !== "待生成", "treasury return commitment is missing");
   await page.locator('[data-comparison="treasury"]').click();
   ensure((await text(page.locator("#shadowpass-action"))).startsWith("理财存入 ·"), "treasury comparison is stale");
+  ensure((await text(page.locator("#receipt-owner-chain"))).includes("理财 Agent"), "treasury privacy receipt is stale");
   await page.waitForTimeout(2_000);
 
   await caption(page, "5 / 5  到期后赎回，本金和收益进入预先承诺的票据");
@@ -164,6 +176,7 @@ try {
   const mobilePage = await mobile.newPage();
   await mobilePage.goto(baseUrl, { waitUntil: "networkidle" });
   await mobilePage.waitForFunction(() => document.querySelector("#treasury-status")?.textContent === "已赎回");
+  ensure(await mobilePage.locator("#privacy-receipt").isVisible(), "mobile privacy receipt is hidden");
   await assertNoHorizontalOverflow(mobilePage, "mobile view");
   await mobilePage.screenshot({ path: mobileScreenshot, fullPage: true });
   await mobilePage.setViewportSize({ width: 320, height: 568 });

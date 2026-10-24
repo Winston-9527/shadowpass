@@ -6,6 +6,7 @@ export function buildComparison({
   amount,
   payTo,
   proofMs,
+  receipt,
 }) {
   const action = operation === "treasury" ? "理财存入" : "采购付款";
   const shared = {
@@ -14,6 +15,7 @@ export function buildComparison({
     amount,
     payTo: payTo ?? null,
     proofMs: proofMs ?? null,
+    receipt: receipt ?? null,
   };
 
   if (operation === "treasury") {

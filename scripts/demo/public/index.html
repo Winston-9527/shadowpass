@@ -106,11 +106,63 @@
 
       <section class="comparison-section" aria-labelledby="comparison-title">
         <div class="section-heading comparison-heading">
-          <div><span class="eyebrow">链上观察者视角</span><h2 id="comparison-title">同样的操作，会暴露什么</h2></div>
+          <div><span class="eyebrow">交易隐私剖面</span><h2 id="comparison-title">同一笔交易，谁能看见什么</h2></div>
           <div class="segmented" role="group" aria-label="对照操作">
             <button type="button" class="active" data-comparison="purchase">采购</button>
             <button type="button" data-comparison="treasury">理财</button>
           </div>
+        </div>
+        <div class="privacy-summary">
+          <div class="privacy-verdict">
+            <span class="privacy-verdict-label">当前匿名程度</span>
+            <div><strong>有限，机制成立</strong><span class="privacy-badge">LIMITED</span></div>
+            <p>付款身份不指向 Alice，但当前只有 1 个根身份。不要把票据层匿名集误讲成生产级身份匿名。</p>
+          </div>
+          <div class="privacy-sets">
+            <div class="privacy-set">
+              <div class="privacy-set-head"><span>票据层可关联集合</span><strong id="privacy-note-set">--</strong></div>
+              <div class="set-dots" id="privacy-note-dots" aria-hidden="true"></div>
+              <p>付款证明只说明来自集合中的一个有效承诺，不指出是哪一张。</p>
+            </div>
+            <div class="privacy-set limited">
+              <div class="privacy-set-head"><span>根身份层匿名集</span><strong id="privacy-identity-set">--</strong></div>
+              <div class="set-dots identity-dots" id="privacy-identity-dots" aria-hidden="true"></div>
+              <p>当前 demo 仍只有 Alice 根身份；真实匿名性需要更多真实用户加入。</p>
+            </div>
+          </div>
+        </div>
+        <div class="privacy-receipt" id="privacy-receipt" data-testid="privacy-receipt" aria-live="polite">
+          <article class="privacy-receipt-panel public-receipt">
+            <div class="privacy-receipt-head">
+              <div><span class="eyebrow">公开链 / 商家视角</span><h3>观察者回执</h3></div>
+              <span class="receipt-state" id="receipt-state">WAITING</span>
+            </div>
+            <div class="unknown-identity"><span>付款人身份</span><strong id="receipt-unknown-identity">等待交易</strong><small>交易中不会出现 Alice 或 Agent 地址</small></div>
+            <dl class="privacy-fields">
+              <div><dt>交易</dt><dd><code id="receipt-tx">--</code></dd></div>
+              <div><dt>执行账户</dt><dd><code id="receipt-executor">--</code><small>facilitator relay</small></dd></div>
+              <div><dt>金额</dt><dd id="receipt-amount">--</dd></div>
+              <div><dt>收款方</dt><dd><code id="receipt-payee">--</code></dd></div>
+              <div><dt>调用目标</dt><dd><code id="receipt-target">--</code></dd></div>
+              <div><dt>方法</dt><dd><code id="receipt-method">--</code></dd></div>
+              <div><dt>Budget nullifier</dt><dd><code id="receipt-nullifier">--</code></dd></div>
+              <div><dt>主人密文</dt><dd><code id="receipt-ciphertext">--</code><small>观察者无法解密</small></dd></div>
+            </dl>
+          </article>
+          <article class="privacy-receipt-panel owner-receipt">
+            <div class="privacy-receipt-head">
+              <div><span class="eyebrow">Alice 查看钥</span><h3>主人回执</h3></div>
+              <span class="owner-only">OWNER ONLY</span>
+            </div>
+            <div class="owner-identity"><span>解密出的委托链</span><div class="owner-chain receipt-owner-chain" id="receipt-owner-chain"><span>等待交易</span></div></div>
+            <div class="owner-facts">
+              <div><span>能看到</span><strong>Alice、管家、Agent、金额、用途</strong></div>
+              <div><span>看不到</span><strong>集合中其他票据的持有人</strong></div>
+              <div><span>对账依据</span><strong>链上 OwnerCiphertext</strong></div>
+              <div><span>证明耗时</span><strong id="receipt-proof">--</strong></div>
+            </div>
+            <p class="owner-note">匿名是对商家和观察者而言；主人仍然拥有完整、可验证的审计权。</p>
+          </article>
         </div>
         <div class="comparison-grid">
           <article class="comparison-column private-column">
