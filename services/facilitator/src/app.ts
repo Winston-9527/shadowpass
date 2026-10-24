@@ -44,27 +44,56 @@ export interface RelayRateLimitConfig {
   trustProxyHeaders: boolean;
 }
 
+export const DEFAULT_CORS_ORIGINS = [
+  "https://shadowpass-wallet.vercel.app",
+  "http://localhost:*",
+  "http://127.0.0.1:*",
+] as const;
+
+interface RelayPermit {
+  commit(): void;
+  release(): void;
+}
+
 export class RelayRateLimiter {
   private readonly minuteHits = new Map<string, number[]>();
-  private readonly faucetHits = new Map<string, number>();
+  private readonly faucetUsage = new Map<string, { day: number; used: number; pending: number }>();
 
   constructor(
     private readonly config: RelayRateLimitConfig,
     private readonly now: () => number = Date.now,
   ) {}
 
-  allow(ip: string, action: RelayAction): boolean {
+  begin(ip: string, action: RelayAction): RelayPermit | null {
     const now = this.now();
     const cutoff = now - 60_000;
     const recent = (this.minuteHits.get(ip) ?? []).filter((timestamp) => timestamp > cutoff);
-    if (recent.length >= this.config.perMinute) return false;
+    if (recent.length >= this.config.perMinute) return null;
     recent.push(now);
     this.minuteHits.set(ip, recent);
-    if (action !== "faucetDeposit") return true;
+    if (action !== "faucetDeposit") return { commit() {}, release() {} };
+
     const day = Math.floor(now / 86_400_000);
-    if (this.faucetHits.get(ip) === day) return false;
-    this.faucetHits.set(ip, day);
-    return true;
+    const current = this.faucetUsage.get(ip);
+    const usage = current?.day === day ? current : { day, used: 0, pending: 0 };
+    if (usage.used + usage.pending >= this.config.faucetPerDay) return null;
+    usage.pending += 1;
+    this.faucetUsage.set(ip, usage);
+
+    let settled = false;
+    return {
+      commit: () => {
+        if (settled) return;
+        settled = true;
+        usage.pending = Math.max(0, usage.pending - 1);
+        usage.used += 1;
+      },
+      release: () => {
+        if (settled) return;
+        settled = true;
+        usage.pending = Math.max(0, usage.pending - 1);
+      },
+    };
   }
 }
 
@@ -103,6 +132,7 @@ export interface FacilitatorAppOptions {
   metrics: InMemoryLatencyRecorder;
   relayRateLimit?: Partial<RelayRateLimitConfig>;
   paymentRateLimit?: { perMinute?: number };
+  corsOrigins?: string[];
   now?: () => number;
 }
 
@@ -115,6 +145,22 @@ function asyncHandler(handler: RequestHandler): RequestHandler {
 export function createFacilitatorApp(options: FacilitatorAppOptions) {
   const app = express();
   app.disable("x-powered-by");
+  const corsOrigins = [...DEFAULT_CORS_ORIGINS, ...(options.corsOrigins ?? [])];
+  app.use((request, response, next) => {
+    const origin = request.headers.origin;
+    if (origin && corsOrigins.some((pattern) => originMatches(origin, pattern))) {
+      response.setHeader("Access-Control-Allow-Origin", origin);
+      response.setHeader("Vary", "Origin");
+      response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+      response.setHeader("Access-Control-Allow-Headers", "content-type,payment-signature,x-payment");
+      response.setHeader("Access-Control-Expose-Headers", "payment-response");
+    }
+    if (request.method === "OPTIONS") {
+      response.status(204).end();
+      return;
+    }
+    next();
+  });
   app.use(express.json({ limit: "1mb" }));
   const trustProxyHeaders = options.relayRateLimit?.trustProxyHeaders
     ?? process.env.VERCEL === "1";
@@ -192,16 +238,20 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
       response.status(404).json({ error: "unknown_relay_action" });
       return;
     }
+    const body = z.object({ args: z.record(z.string(), z.unknown()) }).strict().parse(request.body);
+    const args = relaySchemas[action].parse(body.args);
     const ip = clientIp(request, trustProxyHeaders);
-    if (!relayLimiter.allow(ip, action)) {
+    const permit = relayLimiter.begin(ip, action);
+    if (!permit) {
       response.status(429).json({ error: "rate_limited" });
       return;
     }
-    const body = z.object({ args: z.record(z.string(), z.unknown()) }).strict().parse(request.body);
-    const args = relaySchemas[action].parse(body.args);
     try {
-      response.json(await options.relay.relay(action, args));
+      const result = await options.relay.relay(action, args);
+      permit.commit();
+      response.json(result);
     } catch (error) {
+      permit.release();
       if (error instanceof RelayRevertError) {
         response.status(400).json({ error: `simulation_failed:${error.revertName}` });
         return;
@@ -219,4 +269,10 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
   });
 
   return app;
+}
+
+function originMatches(origin: string, pattern: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern.endsWith(":*")) return origin.startsWith(pattern.slice(0, -1));
+  return origin === pattern;
 }

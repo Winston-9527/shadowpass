@@ -20,6 +20,7 @@
 | A4 应用合约：Payout、TreasuryAdapter、MockVault、ShadowToken | ✅ #4，Foundry 46/46；真实 Gate `TREASURY_SUPPLY → withdraw → NoteMemo` 集成通过 |
 | A5 部署：Anvil 一键环境 | 🚧 #5，Anvil MVP 实际部署和测试币发放通过，见 #37；Base Sepolia 与 D2 真实证明待做 |
 | 工单拆分（#2–#13，总览 #14）、README、`docs/INTERFACES.md`、`AGENTS.md` | ✅ |
+| 演示前加固 #46（必做）：facilitator 启动、领币限流、CORS、合约 faucet 与产物托管说明 | ✅ 启动冒烟、失败不扣额度、每日可配置、CORS 预检、10,000/100 spUSD 边界和外部产物托管文档完成 |
 | 域名（passkey RP ID） | ✅ `shadowpass-wallet.vercel.app` |
 | monorepo 骨架、`docs/ARCHITECTURE.md`、CI | ✅ |
 | 演示形态：不做原生 App；**Chrome + Google 密码管理器 + Touch ID**（PRF 已实测可用）；Safari 备用（未测）；Web Push 选做 | ✅ 2026-10-23 |
