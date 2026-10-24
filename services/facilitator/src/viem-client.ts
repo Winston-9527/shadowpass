@@ -66,8 +66,8 @@ export class RelayRevertError extends Error {
 
 export class RelayInFlightError extends Error {
   constructor(readonly lockKey: string) {
-    super("relay_in_flight");
-    this.name = "relay_in_flight";
+    super("operation_in_progress");
+    this.name = "operation_in_progress";
   }
 }
 

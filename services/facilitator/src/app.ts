@@ -264,7 +264,7 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
         return;
       }
       if (error instanceof RelayInFlightError) {
-        response.status(409).json({ error: "relay_in_flight" });
+        response.status(409).json({ error: "operation_in_progress" });
         return;
       }
       response.status(502).json({ error: "relay_failed" });

@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 import { createFacilitatorApp } from "../src/app.js";
 import { InMemoryLatencyRecorder } from "../src/metrics.js";
-import { RelayRevertError } from "../src/viem-client.js";
+import { RelayInFlightError, RelayRevertError } from "../src/viem-client.js";
 
 const calls: unknown[] = [];
 const relay = {
@@ -262,6 +262,34 @@ describe("facilitator HTTP service", () => {
     });
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "simulation_failed:FaucetLimit" });
+  });
+
+  it("returns the shared in-flight error code", async () => {
+    const app = createFacilitatorApp({
+      facilitator: {
+        getSupported: () => ({ kinds: [], extensions: [], signers: {} }),
+        verify: async () => ({ isValid: true }),
+        settle: async () => ({ success: true, transaction: "0x05", network: "eip155:84532" }),
+      },
+      relay: {
+        async relay() {
+          throw new RelayInFlightError("budget:1");
+        },
+      },
+      metrics: new InMemoryLatencyRecorder(),
+    });
+    const server = app.listen(0, "127.0.0.1");
+    servers.push(server);
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("listen failed");
+    const response = await fetch(`http://127.0.0.1:${address.port}/relay/join`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ args: { commitment: "1" } }),
+    });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: "operation_in_progress" });
   });
 
   it("rate limits verify and settle by client IP", async () => {

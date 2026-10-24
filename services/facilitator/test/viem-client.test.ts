@@ -81,7 +81,11 @@ describe("viem wallet relay", () => {
     const relay = createViemWalletRelayClient({ publicClient, walletClient, deployment: DEPLOYMENT });
 
     const first = relay.relay("join", { commitment: "7" });
-    await expect(relay.relay("join", { commitment: "7" })).rejects.toBeInstanceOf(RelayInFlightError);
+    await expect(relay.relay("join", { commitment: "7" })).rejects.toMatchObject({
+      name: "operation_in_progress",
+      message: "operation_in_progress",
+      lockKey: "join:7",
+    });
     await first;
     expect(relayLockKey("execute" as any, { budget: { budgetNf: "42" } })).toBe("budget:42");
     expect(relayLockKey("treasuryWithdraw" as any, { positionId: "9" })).toBe("position:9");
