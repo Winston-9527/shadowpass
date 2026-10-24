@@ -33,6 +33,55 @@ Alice（7 天，100 USDC）
 
 本地一键复现、三分钟剧本、对照面板说明和备用录屏见 [演示文档](docs/demo/README.md)。
 
+## 密码学方案怎么讲
+
+一句话版本：
+
+> ShadowPass 不把 Alice 的地址交给合约，而是让 Agent 证明：自己确实持有一张由 Alice 委托、未过期、未吊销、权限足够，并且还没花过的匿名预算凭证；链上不知道这张凭证属于谁，Alice 仍能解开完整委托链对账。
+
+方案可以拆成四层：
+
+1. **匿名委托凭证**：Alice 的根密钥派生出管家，再签发采购 Agent（`PAY`）和理财 Agent（`TREASURY`）。Agent 用 Groth16 证明完整委托链有效、能力位不超过父级、凭证未过期且未被吊销，但不公开整条链。
+2. **匿名预算票据**：预算进入共享资金池后变成票据树中的承诺。付款证明只说明“我控制池子里一张有效票据”，不说明它来自 Alice 的哪次入金。
+3. **Nullifier 防双花**：每张票据消耗时产生稳定 nullifier。重复花费同一张票据会被拒绝，但观察者不能从 nullifier 反推出 Alice。
+4. **主人可审计**：每笔交易附带只有 Alice 查看公钥能解开的 `OwnerCiphertext`。商家和观察者只看到密文，Alice 钱包能解出 `Alice → 管家 → Agent`、金额和交易。
+
+现场最直观的展示是同时打开三个视角：
+
+| 视角 | 能看到什么 | 讲解重点 |
+|---|---|---|
+| 公开链 | 资金池、Groth16 证明、nullifier、票据根、金额、不可读的主人密文 | 只能确认“池内一张有效票据被使用”，没有 Alice 或 Agent 的长期身份 |
+| 商家 | 金额、订单、结算交易、池内已授权付款 | 确认收款，但无法把该用户的其他消费串起来 |
+| Alice 钱包 | 两条分支、完整委托链、金额、交易、未上报提醒 | 对外匿名不等于主人无法审计 |
+
+可以在链上指出：付款交易的 `from` 是 facilitator，`to` 是 Gate/Payout；交易参数中没有 Alice 地址或明文委托链。对照普通 EOA、ERC-7710 或 session key 时，链上通常会公开 Alice 的智能账户、授权关系和执行路径。
+
+一分钟讲解稿：
+
+> Alice 用 Touch ID 派生根密钥，把预算拆成采购和理财两张受限凭证。Agent 付款时生成零知识证明，证明自己持有一条未过期、未吊销、权限匹配的委托链，并且拥有池子里一张没花过的预算票据。链上只看到证明、nullifier、金额和只有 Alice 能解开的密文。商家能确认收款，但看不到 Alice 或 Agent 的长期身份；重复使用同一张票据会被 nullifier 拒绝。最后 Alice 打开钱包，用自己的查看钥解出完整账单。所以对外匿名，对主人不完全匿名。
+
+需要诚实说明：ZK 让链上只保留“交易有效”的结论，不保留“谁授权”的答案；但金额、时间、目标、交易存在性和网络元数据仍可能公开。匿名强度取决于可关联票据集合，当前演示预置的 20 个模拟账户只扩大票据层匿名集，不代表生产级身份匿名性。
+
+## PTAU 与可信设置
+
+`PTAU`（Powers of Tau）是 Groth16 的通用第一阶段可信设置参数，不是私钥，也不是 ShadowPass 专用数据。ShadowPass 复用它为 `main_d2`、`main_reg`、`main_revoke`、`budget_transfer` 和 `budget_mint` 生成各电路自己的 `.zkey`。
+
+官方演示文件是 `powersOfTau28_hez_final_18.ptau`：
+
+- 大小：302,072,984 字节
+- SHA-256：`e970efa7774da80101e0ac336d083ef3339855c98112539338d706b2b89ac694`
+- 自动下载地址：`https://circom.info/powersOfTau28_hez_final_18.ptau`
+- 不进入 git；首次生成后的 `.zkey`、WASM 和 verifier 缓存在 `scripts/mvp/.runtime/artifacts/`
+
+如果本地已有文件，可以显式指定：
+
+```bash
+export SHADOWPASS_PTAU=/absolute/path/to/powersOfTau28_hez_final_18.ptau
+npm run demo:mvp
+```
+
+没有指定时，MVP 会和协议层演示一样下载并校验哈希，支持断点续传。当前 ShadowPass 的 phase-2 是单次本地贡献，只适合测试网和黑客松演示；生产环境需要独立审计和多方可信设置仪式。
+
 ## 架构
 
 ```mermaid
