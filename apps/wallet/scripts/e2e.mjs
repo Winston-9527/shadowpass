@@ -101,10 +101,55 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 980 } });
   await context.addInitScript(installMockCredential, "direct");
   const page = await context.newPage();
+  const simulationWrites = [];
+  const trackSimulationRequests = (request) => {
+    if (request.method() !== "POST") return;
+    const requestUrl = new URL(request.url());
+    if (
+      requestUrl.pathname.startsWith("/slot/")
+      || requestUrl.pathname.startsWith("/box/")
+      || requestUrl.pathname.startsWith("/facilitator")
+      || requestUrl.port === String(rpcAddress.port)
+      || requestUrl.port === String(mailboxAddress.port)
+    ) {
+      simulationWrites.push(`${request.method()} ${requestUrl.pathname}`);
+    }
+  };
+  page.on("request", trackSimulationRequests);
   const response = await page.goto(url);
   const csp = response?.headers()["content-security-policy"] ?? "";
   if (!csp.includes("'wasm-unsafe-eval'")) throw new Error("preview response missing wasm CSP");
   await page.evaluate(() => WebAssembly.compile(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0)));
+
+  await page.getByTestId("simulation-toggle").click();
+  await page.getByTestId("simulation-panel").waitFor();
+  await page.getByTestId("simulation-open").click();
+  await page.getByTestId("simulation-fund").click();
+  await page.getByTestId("simulation-issue-tab").click();
+  await page.getByTestId("simulation-agent-name").fill("Purchasing Agent");
+  await page.getByTestId("simulation-card-budget").fill("40");
+  await page.getByTestId("simulation-issue").click();
+  await page.getByText("Purchasing Agent card issued in simulation.", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Wallet", exact: true }).click();
+  await page.getByTestId("simulation-action-sim-card-1").click();
+  await page.getByRole("button", { name: "Bills", exact: true }).click();
+  await page.getByTestId("simulation-bill-row").waitFor();
+  await page.getByTestId("simulation-tree-tab").click();
+  await page.getByTestId("simulation-revoke-sim-card-1").click();
+  await page.getByTestId("simulation-tree-sim-card-1").getByText("revoked", { exact: true }).waitFor();
+  if (simulationWrites.length > 0) {
+    throw new Error(`Simulation attempted external writes: ${simulationWrites.join(", ")}`);
+  }
+  page.off("request", trackSimulationRequests);
+  await page.screenshot({ path: new URL("wallet-simulation.png", outputDir).pathname, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const simulationOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+  await page.screenshot({ path: new URL("wallet-simulation-mobile.png", outputDir).pathname, fullPage: true });
+  if (simulationOverflow) throw new Error("Simulation layout overflows horizontally on mobile");
+  await page.setViewportSize({ width: 1440, height: 980 });
+  await page.getByTestId("simulation-toggle").click();
+  await page.getByTestId("simulation-panel").waitFor({ state: "hidden" });
+  await page.getByTestId("create-wallet").waitFor();
 
   await page.getByTestId("create-wallet").click();
   await page.getByRole("dialog").waitFor();
@@ -248,8 +293,8 @@ try {
     url,
     previewHeaders: { csp },
     mailbox: process.env.VITE_MAILBOX_URL,
-    screenshots: ["wallet-recovery.png", "wallet-unlocked.png", "wallet-pairing.png", "wallet-mobile.png", "wallet-prf-unavailable.png", "wallet-prf-unsupported.png"],
-    checks: ["production CSP + WebAssembly", "registration returns PRF directly", "enabled-only registration with targeted PRF login", "create", "passkey unlock", "second passkey with distinct PRF", "synced passkey slot", "recovery slot in new browser with pagination", "pairing URL and pairing code", "mobile overflow", "no WebAuthn", "authenticator without PRF", "passkey remains usable when deployment config fails"],
+    screenshots: ["wallet-simulation.png", "wallet-simulation-mobile.png", "wallet-recovery.png", "wallet-unlocked.png", "wallet-pairing.png", "wallet-mobile.png", "wallet-prf-unavailable.png", "wallet-prf-unsupported.png"],
+    checks: ["simulation opens, issues, pays and revokes without real services", "simulation issues zero external write requests", "simulation mobile layout has no horizontal overflow", "production CSP + WebAssembly", "registration returns PRF directly", "enabled-only registration with targeted PRF login", "create", "passkey unlock", "second passkey with distinct PRF", "synced passkey slot", "recovery slot in new browser with pagination", "pairing URL and pairing code", "mobile overflow", "no WebAuthn", "authenticator without PRF", "passkey remains usable when deployment config fails"],
   }, null, 2));
 } finally {
   await browser.close();

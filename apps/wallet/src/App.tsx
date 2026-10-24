@@ -5,6 +5,7 @@ import {
   Copy,
   Database,
   Fingerprint,
+  FlaskConical,
   KeyRound,
   Link2,
   LoaderCircle,
@@ -24,6 +25,7 @@ import { publicKeyText, type WalletKeyKind } from "./wallet/keys";
 import { LandingSections } from "./LandingSections";
 import { loadWalletConfig, type WalletConfig } from "./flows/config";
 import { OwnerConsole } from "./views/OwnerConsole";
+import { SimulationConsole } from "./views/SimulationConsole";
 
 type SupportState =
   | { status: "checking" }
@@ -96,6 +98,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [walletConfig, setWalletConfig] = useState<WalletConfig | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
+  const [simulation, setSimulation] = useState(false);
   const sessionRef = useRef<WalletSession | null>(null);
 
   const keyRows = useMemo(() => session ? [
@@ -200,15 +203,6 @@ export function App() {
     setError(null);
   };
 
-  if (support.status === "checking") {
-    return (
-      <div className="center-state">
-        <LoaderCircle className="spin" size={24} />
-        <span>Checking authenticator</span>
-      </div>
-    );
-  }
-
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -218,16 +212,39 @@ export function App() {
           <span className="brand-sub">Wallet</span>
         </div>
         <div className="topbar-meta">
-          <span className="network-pill"><Link2 size={14} /> {walletConfig?.network === "anvil" ? "Anvil" : "Base Sepolia"}</span>
-          <span className={`lock-pill ${session ? "online" : ""}`}>
-            {session ? <Check size={14} /> : <LockKeyhole size={14} />}
-            {session ? "Unlocked" : "Locked"}
+          <span className={`network-pill ${simulation ? "simulation" : ""}`}>
+            {simulation ? <FlaskConical size={14} /> : <Link2 size={14} />}
+            {simulation ? "Simulation" : walletConfig?.network === "anvil" ? "Anvil" : "Base Sepolia"}
           </span>
+          <span className={`lock-pill ${session && !simulation ? "online" : ""}`}>
+            {simulation ? <FlaskConical size={14} /> : session ? <Check size={14} /> : <LockKeyhole size={14} />}
+            {simulation ? "No real execution" : session ? "Unlocked" : "Locked"}
+          </span>
+          <button
+            className={`simulation-toggle ${simulation ? "active" : ""}`}
+            data-testid="simulation-toggle"
+            aria-pressed={simulation}
+            disabled={busy !== null}
+            onClick={() => {
+              setSimulation((current) => !current);
+              setError(null);
+            }}
+          >
+            <FlaskConical size={16} />
+            {simulation ? "Exit simulation" : "Simulation"}
+          </button>
         </div>
       </header>
 
       <main>
-        {support.status === "unsupported" ? (
+        {simulation ? (
+          <SimulationConsole />
+        ) : support.status === "checking" ? (
+          <div className="center-state app-center-state">
+            <LoaderCircle className="spin" size={24} />
+            <span>Checking authenticator</span>
+          </div>
+        ) : support.status === "unsupported" ? (
           <section className="notice warning" data-testid="prf-unavailable">
             <AlertTriangle size={22} />
             <div>
@@ -346,12 +363,12 @@ export function App() {
             </section>
           </div>
         )}
-        <LandingSections />
+        {!simulation && support.status !== "checking" && <LandingSections />}
       </main>
 
       <footer className="app-footer">
-        <span>{location.hostname}</span>
-        <span>RP ID: {location.hostname === "localhost" ? "localhost" : RP_ID}</span>
+        <span>{simulation ? "Simulation | local browser state only" : location.hostname}</span>
+        <span>{simulation ? "No wallet or chain writes" : `RP ID: ${location.hostname === "localhost" ? "localhost" : RP_ID}`}</span>
       </footer>
 
       {recoveryCode && <RecoveryDialog code={recoveryCode} onClose={() => setRecoveryCode(null)} />}
