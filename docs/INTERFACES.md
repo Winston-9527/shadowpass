@@ -342,7 +342,7 @@ GET  /slot/:slot?after=n                                                    -> 2
 
 ## 14. facilitator 的钱包交易代付接口
 
-用户钱包没有 ETH，开通、领币、发卡、吊销这几类交易由 facilitator 代为发送。facilitator **只转发下表中的调用**，参数原样传入合约，自己不做任何授权判断（授权由证明和合约保证）。
+用户钱包没有 ETH，开通、领币、发卡、吊销、理财存入和赎回这几类交易由 facilitator 代为发送。facilitator **只转发下表中的调用**，参数原样传入合约，自己不做任何授权判断（授权由证明和合约保证）。
 
 ```
 POST /relay/:action      body: { "args": { ... } }       -> 200 { "transaction": "0x..", "blockNumber": "..", "logs": [...] }
@@ -357,7 +357,13 @@ POST /relay/:action      body: { "args": { ... } }       -> 200 { "transaction":
 | `transferBudget` | `ShadowGate.transferBudget(proof, noteRoot, revokedRoot, nullifier, cm1, cm2, memo1, memo2)` |
 | `revoke` | `ShadowRevocations.revoke(proof, newRoot, entry)` |
 | `registerState` | `ShadowGate.registerState(issued, revoked, root)` |
+| `execute` | `ShadowGate.execute(proof, roots, nowTs, action, ct, budget, memoChange)`，仅允许 `action.method == TREASURY_SUPPLY` |
+| `treasuryWithdraw` | `TreasuryAdapter.withdraw(positionId)` |
 
-- 发送前先 `eth_call` 模拟，失败就返回 400 和 revert 名称，不上链。
+`execute` 的 `args` 与 §8.4 的付款 payload 同形，但 `ct` 固定为 D=2 的 8 个字段，`nowTs` 必须是 uint64；`treasuryWithdraw` 只接受 `{ "positionId": "<uint>" }`。
+
+- 发送前在本地签名账户的串行队列内执行 `eth_call` 模拟；队列内会重新模拟，失败返回 400 和 revert 名称，不广播交易。
+- `execute` 只用于理财存入。`PAY` 必须走 x402 §8.3 的 `/settle`，不得通过 relay 绕过付款请求绑定、按 `budgetNf` 的结算锁和商家限流。
+- 同一时刻，`execute` 按 `budget.budgetNf`、`treasuryWithdraw` 按 `positionId` 只允许一个请求在途；重复请求返回 409 `{ "error": "operation_in_progress" }`。
 - 按 IP 限流；`relay` 默认每分钟 60 次，`faucetDeposit` 的每日次数由 `RELAY_FAUCET_PER_DAY` 配置（默认 1），且只在模拟成功后计入。可信代理头的规则同 §9。
 - 真实入金（§12，从 MetaMask 发出）不经过这里。
