@@ -1,0 +1,23 @@
+{
+  "chainId": 84532,
+  "gate": "0xaccdd20f1da923ec63b7b13cdaa1fe6386933079",
+  "registry": "0x64c2877cd23a2a72860ec62d07aaa9a47fbd1b5e",
+  "revocations": "0x5c645b3808e6371531a11eb780174a7d42e0f893",
+  "group": "0xf13828be98d2fd66f2fad17bb8e0decd152363ea",
+  "payout": "0x6deacc5143aecfc44ddbf9536fe23948f8f43adc",
+  "treasury": "0x14251858911d3f6784524246a034fe05d72cc2e6",
+  "vault": "0x42f220044ee4d1ec7713a9c3ca46a057e9fbff64",
+  "token": "0x021d50e0b687214ed15a2397373a0533c2a54bac",
+  "verifiers": {
+    "d1": "0xc6621921e6f20efe19b1ee8abee4357fa65f7f0e",
+    "d2": "0x1ab5dc10f5adfe736a785b64aa9504ddaea6f597",
+    "d3": "0xf0b697c77a52db589dbd3c32ed7e7bc45301fee9",
+    "reg": "0x4f006f0a6abdb832c78a24c15d1927d1d87d032b",
+    "revoke": "0xbe60332408423d1fc01bc6938948b15fc9387394",
+    "transfer": "0x8620b72b4d18c49fb3fb7486bf98e5c6daa51934",
+    "mint": "0xf52a92cf650b055c1936c5261313809b4c9466a8"
+  },
+  "startBlock": 49544491,
+  "facilitator": "https://shadowpass-facilitator.vercel.app",
+  "mailbox": "https://shadowpass-mailbox.vercel.app"
+}

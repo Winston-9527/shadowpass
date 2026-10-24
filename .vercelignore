@@ -1,0 +1,15 @@
+.DS_Store
+.env
+.env.*
+artifacts/
+vendor/
+contracts/
+docs/
+spikes/
+apps/wallet/public/zk/
+apps/wallet/dist/
+scripts/demo/.runtime/
+scripts/mvp/.runtime/
+*.zkey
+*.ptau
+*.wtns
