@@ -17,6 +17,7 @@ function context(
     malicious: false,
     maxPayment: 1_000n,
     nowSeconds: 1_000n,
+    treasuryVaults: [deployment.vault],
     ...overrides,
   };
 }
@@ -36,12 +37,56 @@ describe("MCP tools", () => {
     const fixture = await createFixture({ cap: 1n });
     await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
     const supply = vi.fn();
-    await expect(treasurySupply(context(fixture, { services: { treasury: { supply, status: async () => ({}) } } }), {
+    await expect(treasurySupply(context(fixture, { services: { treasury: { supply, withdraw: async () => { throw new Error("unexpected"); }, status: async () => ({}) } } }), {
       vault: deployment.vault,
       amount: 1n,
       termSeconds: 60n,
     })).rejects.toMatchObject({ code: "capability_mismatch" });
     expect(supply).not.toHaveBeenCalled();
+  });
+
+  it("records a treasury supply and sends a treasury receipt to the owner", async () => {
+    const fixture = await createFixture();
+    await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
+    const bodies: unknown[] = [];
+    const mailbox = new MailboxClient("http://mailbox.test", {
+      fetch: async (_input, init) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ id: 1 }), { status: 201, headers: { "content-type": "application/json" } });
+      },
+    });
+    const result = await treasurySupply(context(fixture, {
+      mailbox,
+      services: {
+        treasury: {
+          supply: async () => ({
+            positionId: "3",
+            tx: `0x${"12".repeat(32)}`,
+            budgetNf: "44",
+            expectedQ: "19",
+            returnCm: "55",
+            maturity: "1060",
+            resource: `treasury:${deployment.vault}`,
+          }),
+          withdraw: async () => { throw new Error("unexpected"); },
+          status: async () => ({}),
+        },
+      },
+    }), { vault: deployment.vault, amount: 20n, termSeconds: 60n });
+    expect(result).toMatchObject({
+      positionId: "3",
+      resource: `treasury:${deployment.vault}`,
+      receiptReported: true,
+    });
+    expect(bodies).toHaveLength(1);
+    expect(await listReceipts(context(fixture))).toEqual([
+      expect.objectContaining({
+        budgetNf: "44",
+        resource: `treasury:${deployment.vault}`,
+        amount: "20",
+        reported: true,
+      }),
+    ]);
   });
 
   it("records a successful payment and reports the receipt to the owner", async () => {

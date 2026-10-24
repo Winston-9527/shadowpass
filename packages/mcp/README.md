@@ -12,10 +12,13 @@ Agent 侧 stdio MCP server。它把 Agent 的本地 EdDSA holder 私钥、X25519
 - 提供 `wallet_status`、`list_receipts`、`pay`、`treasury_supply`、`treasury_status`、`delegate`。
 - `pay` 通过官方 x402 fetch 客户端处理 402：使用 SDK 选票、构造 action 和找零 `memoChange`，生成 D1/D2/D3 证明并在本地验证通过后才提交；`spendControls` 只允许部署中的测试币，并限制单笔金额。
 - `pay` 返回商家响应体（最多 32 KiB），并标记为 `trust: "untrusted"`；付款成功后立即把找零票据写入本地 store。
-- `pay` 和 `treasury_supply` 在执行前本地检查能力位、金额上限和参数；能力不符时不会生成证明或发起网络请求。
-- 付款成功后记录收据并发送给主人信箱；`--malicious` 只跳过收据上报，仍保留本地记录。
+- `pay` 和 `treasury_supply` 在执行前本地检查能力位、金额上限和参数；`treasury_supply` 还会检查金库白名单与当前余额。检查失败时不会生成证明或发起网络请求。
+- `treasury_supply` 通过 `TreasuryAdapter.quote` 取得 `expectedQ`，提交五个字段的 `TREASURY_SUPPLY` action，保存找零和仓位，并把带 `treasury:<vault>` 资源的收据发给主人。
+- `treasury_status` 合并本地仓位与链上 `PositionOpened`/仓位状态；`treasury_withdraw` 只允许到期后调用 relay，并从链上 `NoteMemo` 校验、恢复 `returnCm` 对应票据。
+- 付款和理财操作共享串行执行队列，避免并发工具调用花掉同一张票据。
+- 付款或理财成功后记录收据并发送给主人信箱；`--malicious` 只跳过收据上报，仍保留本地记录。
 
-`pay` 已使用 `@shadowpass/x402` 的 `ShadowpassClientScheme` 与 `@x402/fetch`；缺少 RPC、证明产物或凭证时会返回固定错误码，不会伪造成功。`treasury_supply`、`treasury_status` 与 `delegate` 的真实后端仍待后续接线。
+`pay` 已使用 `@shadowpass/x402` 的 `ShadowpassClientScheme` 与 `@x402/fetch`。理财工具依赖 facilitator 的 `POST /relay/execute` 与 `POST /relay/treasuryWithdraw`；缺少 RPC、证明产物、relay 或凭证时会返回固定错误码，不会伪造成功。`delegate` 的真实后端仍待后续接线。
 
 ## 安装
 
@@ -89,7 +92,8 @@ claude mcp add shadowpass -- \
 ├─ secrets.json     holder 私钥、X25519 私钥和一次性配对秘密
 ├─ credentials.json 最近验证通过且属于锁定主人的凭证包
 ├─ notes.json       本地票据
-└─ receipts.json    链上付款收据与是否已上报
+├─ receipts.json    链上付款、理财收据与是否已上报
+└─ treasury.json    理财仓位、到期时间和待赎回票据
 ```
 
 日志不会打印 holder 私钥、信箱私钥或凭证签名内容。配对链接和码包含 Agent 公钥、信箱公钥和一次性配对秘密，应只通过可信渠道交给主人钱包。
@@ -101,4 +105,6 @@ npm run typecheck -w @shadowpass/mcp
 npm test -w @shadowpass/mcp
 ```
 
-测试使用 mock chain state、可注入 prover、真实 SDK witness 和官方 x402 fetch 客户端，不依赖 anvil 或外部服务。覆盖首次配对、主人锁定、伪造签名、重放、回滚、链上状态恢复、票据恢复、找零 memo、ctx_hash 绑定、本地证明预验证、测试币限制和单笔上限。真实 anvil 商家端到端与耗时分解在下一阶段补跑。
+测试使用 mock chain state、可注入 prover、真实 SDK witness 和官方 x402 fetch 客户端，不依赖 anvil 或外部服务。覆盖首次配对、主人锁定、伪造签名、重放、回滚、链上状态恢复、票据恢复、找零 memo、ctx_hash 绑定、本地证明预验证、测试币限制、单笔上限、理财白名单、到期检查和并发票据保护。
+
+真实 anvil 验证需同时使用 #50 本地分支提供的 relay `execute`/`treasuryWithdraw`。验收记录：并发两次 `treasury_supply` 只有一次成功；D2 证明约 1.49 秒；存入后找零 5 spUSD；到期赎回恢复 20.199995 spUSD；主人可解出 Alice、管家、理财 Agent 三跳。

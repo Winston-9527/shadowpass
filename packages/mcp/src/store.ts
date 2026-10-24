@@ -6,7 +6,7 @@ import { decodeBundle, encodeBundle, identityFromPrv } from "@shadowpass/sdk";
 import type { CertificateBundle, Identity } from "@shadowpass/sdk";
 import sodium from "libsodium-wrappers";
 import { z } from "zod";
-import type { AgentConfig, AgentSecrets, StoredReceipt } from "./types.js";
+import type { AgentConfig, AgentSecrets, StoredReceipt, StoredTreasuryPosition } from "./types.js";
 
 const scalar = z.string().regex(/^(0|[1-9][0-9]*)$/);
 const privateErrorCode = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
@@ -47,6 +47,21 @@ const StoredReceiptSchema: z.ZodType<StoredReceipt> = z.object({
   amount: scalar,
   createdAt: z.string(),
   reported: z.boolean(),
+});
+
+const StoredTreasuryPositionSchema: z.ZodType<StoredTreasuryPosition> = z.object({
+  positionId: scalar,
+  vault: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  amount: scalar,
+  expectedQ: scalar,
+  maturity: scalar,
+  returnCm: scalar,
+  returnMemo: z.string().regex(/^0x(?:[0-9a-fA-F]{2})*$/),
+  returnNote: StoredNoteSchema,
+  openTx: z.string(),
+  openedAt: z.string(),
+  withdrawn: z.boolean(),
+  withdrawTx: z.string().optional(),
 });
 
 export interface AgentStoreOptions {
@@ -136,6 +151,7 @@ export class AgentStore {
     credentials: string;
     notes: string;
     receipts: string;
+    treasury: string;
   };
 
   private config: AgentConfig;
@@ -161,6 +177,7 @@ export class AgentStore {
       credentials: path.join(directory, "credentials.json"),
       notes: path.join(directory, "notes.json"),
       receipts: path.join(directory, "receipts.json"),
+      treasury: path.join(directory, "treasury.json"),
     };
   }
 
@@ -181,6 +198,7 @@ export class AgentStore {
       ensurePrivateFile(path.join(directory, "credentials.json")),
       ensurePrivateFile(path.join(directory, "notes.json")),
       ensurePrivateFile(path.join(directory, "receipts.json")),
+      ensurePrivateFile(path.join(directory, "treasury.json")),
     ]);
     const [rawConfig, rawSecrets] = await Promise.all([readJson(configPath), readJson(secretsPath)]);
 
@@ -376,6 +394,19 @@ export class AgentStore {
     if (existing >= 0) receipts[existing] = receipt;
     else receipts.push(receipt);
     await writeJson(this.paths.receipts, receipts);
+  }
+
+  async treasuryPositions(): Promise<StoredTreasuryPosition[]> {
+    const raw = await readJson(this.paths.treasury);
+    return raw === undefined ? [] : z.array(StoredTreasuryPositionSchema).parse(raw);
+  }
+
+  async upsertTreasuryPosition(position: StoredTreasuryPosition): Promise<void> {
+    const positions = await this.treasuryPositions();
+    const index = positions.findIndex((candidate) => candidate.positionId === position.positionId);
+    if (index >= 0) positions[index] = position;
+    else positions.push(position);
+    await writeJson(this.paths.treasury, positions);
   }
 
   private async reconcileCredentialMetadata(): Promise<void> {

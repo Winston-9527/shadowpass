@@ -13,17 +13,20 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import qrcode from "qrcode-terminal";
 import { z } from "zod";
 import { CredentialInbox } from "./inbox.js";
+import { SerialTaskQueue } from "./execution.js";
 import { reconcileNotes } from "./notes.js";
 import { buildPairing } from "./pairing.js";
 import { PaymentBuilderError } from "./payment-builder.js";
 import { createShadowpassPaymentService } from "./payment.js";
 import { AgentStore } from "./store.js";
+import { createShadowpassTreasuryService } from "./treasury.js";
 import {
   delegate,
   listReceipts,
   pay,
   treasuryStatus,
   treasurySupply,
+  treasuryWithdraw,
   walletStatus,
   type McpToolContext,
 } from "./tools.js";
@@ -111,6 +114,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<McpRuntime
   const stateRefreshIntervalMs = options.stateRefreshIntervalMs
     ?? asNumber(process.env.SHADOWPASS_STATE_TTL_MS ?? "2000", "SHADOWPASS_STATE_TTL_MS");
   const services: McpServices = { ...options.services };
+  const executionQueue = new SerialTaskQueue();
   let context!: McpToolContext;
   if (!services.payment && deployment) {
     services.payment = createShadowpassPaymentService({
@@ -118,9 +122,20 @@ export async function createRuntime(options: RuntimeOptions): Promise<McpRuntime
       deployment,
       state: () => context.state,
       maxPayment,
+      queue: executionQueue,
       blockTimestamp: chainClient
         ? async () => (await chainClient.getBlock({ blockTag: "latest" })).timestamp
         : async () => { throw new PaymentBuilderError("rpc_unavailable"); },
+    });
+  }
+  if (!services.treasury && deployment) {
+    services.treasury = createShadowpassTreasuryService({
+      store,
+      deployment,
+      state: () => context.state,
+      maxPayment,
+      rpcUrl,
+      queue: executionQueue,
     });
   }
   context = {
@@ -133,6 +148,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<McpRuntime
     malicious,
     maxPayment,
     nowSeconds: options.nowSeconds,
+    treasuryVaults: deployment ? [deployment.vault] : [],
   };
   return {
     store,
@@ -269,6 +285,10 @@ export function createMcpServer(runtime: McpRuntime): McpServer {
   tool("treasury_status", {
     description: "Show configured treasury positions.",
   }, async () => treasuryStatus(runtime.context));
+  tool("treasury_withdraw", {
+    description: "Withdraw a matured treasury position. Requires TREASURY capability.",
+    inputSchema: { positionId: z.string().regex(/^[1-9][0-9]*$/) },
+  }, async (args) => treasuryWithdraw(runtime.context, asBigInt(args.positionId, "positionId")));
   tool("delegate", {
     description: "Create a delegated child agent. Requires a delegation backend.",
     inputSchema: {

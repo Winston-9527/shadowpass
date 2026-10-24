@@ -27,6 +27,7 @@ describe("stdio MCP server", () => {
         "pay",
         "treasury_supply",
         "treasury_status",
+        "treasury_withdraw",
         "delegate",
       ]);
       const result = await client.callTool({ name: "wallet_status", arguments: {} });
