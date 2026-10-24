@@ -59,7 +59,7 @@ const proofComponents = [
   { name: "c", type: "uint256[2]" },
 ] as const;
 
-const gateAbi = [
+export const gateAbi = [
   ...shadowErrorAbi,
   {
     type: "function",

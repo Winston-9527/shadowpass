@@ -31,6 +31,8 @@ Alice（7 天，100 USDC）
 
 被提示注入攻破的采购 Agent 碰不到理财资金；理财 Agent 付不了款。两支的每一笔都只有 Alice 能解密查看；出问题只吊销那一支。
 
+本地一键复现、三分钟剧本、对照面板说明和备用录屏见 [演示文档](docs/demo/README.md)。
+
 ## 架构
 
 ```mermaid
@@ -82,6 +84,7 @@ flowchart LR
 - [代码架构](docs/ARCHITECTURE.md)：monorepo 结构、依赖方向、SDK API、产物分发、CI
 - [共享接口规范](docs/INTERFACES.md)：所有工单共同的约定
 - [部署](docs/DEPLOY.md)：Vercel 项目配置、证明产物托管、常见报错
+- [端到端演示](docs/demo/README.md)：一键启动、模拟匿名集、浏览器验收、剧本与答辩材料
 - [开发 Agent 工作约定](AGENTS.md)
 - 工作拆分：见 Issues，总览在 tracking issue
 

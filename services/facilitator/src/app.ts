@@ -2,6 +2,9 @@ import express, { type NextFunction, type Request, type RequestHandler, type Res
 import { z } from "zod";
 import {
   RELAY_ACTIONS,
+  TREASURY_METHOD,
+  addressSchema,
+  bytes4Schema,
   hexSchema,
   proofSchema,
   uintSchema,
@@ -30,6 +33,30 @@ const relaySchemas = {
   }).strict(),
   revoke: z.object({ proof: proofSchema, newRoot: uintSchema, entry: uintSchema }).strict(),
   registerState: z.object({ issued: uintSchema, revoked: uintSchema, root: uintSchema }).strict(),
+  execute: z.object({
+    proof: proofSchema,
+    roots: z.object({ issued: uintSchema, revoked: uintSchema, root: uintSchema }).strict(),
+    nowTs: uintSchema.refine((value) => BigInt(value) <= (1n << 64n) - 1n, "invalid_uint64"),
+    action: z.object({
+      target: addressSchema,
+      method: bytes4Schema.refine(
+        (value) => value.toLowerCase() === TREASURY_METHOD.toLowerCase(),
+        "pay_must_use_x402",
+      ),
+      amount: uintSchema,
+      nonce: uintSchema,
+      params: hexSchema,
+    }).strict(),
+    ct: z.array(uintSchema).length(8),
+    budget: z.object({
+      noteRoot: uintSchema,
+      budgetNf: uintSchema,
+      cmChange: uintSchema,
+      qSpent: uintSchema,
+    }).strict(),
+    memoChange: hexSchema,
+  }).strict(),
+  treasuryWithdraw: z.object({ positionId: uintSchema }).strict(),
 } satisfies Record<RelayAction, z.ZodTypeAny>;
 
 const verifyBodySchema = z.object({
