@@ -277,6 +277,14 @@ export class AgentStore {
     return this.secrets.pair!;
   }
 
+  get isPaired(): boolean {
+    return Boolean(
+      this.config.pinnedRootHash
+      && this.config.ownerBoxPk
+      && this.config.pairingHash === pairingFingerprint(this.pairingSecret),
+    );
+  }
+
   get mailboxCursor(): number {
     return this.config.mailboxCursor;
   }
@@ -340,6 +348,13 @@ export class AgentStore {
     this.config.lastCredentialError = undefined;
     await writeJson(this.paths.config, this.config);
     await this.addNote(validated.note);
+
+    if (ownership === "unpaired") {
+      this.secrets = { ...this.secrets, pair: randomBytes(16).toString("hex") };
+      await writeJson(this.paths.secrets, this.secrets);
+      this.config.pairingHash = pairingFingerprint(this.pairingSecret);
+      await writeJson(this.paths.config, this.config);
+    }
   }
 
   async rotatePairing(): Promise<void> {

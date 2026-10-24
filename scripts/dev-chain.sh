@@ -31,7 +31,7 @@ if cast block-number --rpc-url "$RPC" >/dev/null 2>&1; then
   fi
   echo "using existing Anvil at $RPC"
 else
-  anvil --host 127.0.0.1 --port "$PORT" --silent > .anvil.log 2>&1 &
+  anvil --host 127.0.0.1 --port "$PORT" --block-time 1 --silent > .anvil.log 2>&1 &
   ANVIL_PID=$!
   STARTED_ANVIL=1
   trap cleanup EXIT

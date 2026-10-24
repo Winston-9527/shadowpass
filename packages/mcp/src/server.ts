@@ -1,5 +1,5 @@
 #!/usr/bin/env -S node --import tsx
-import { createPublicClient, http } from "viem";
+import { createPublicClient, http, toHex, type PublicClient } from "viem";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -7,7 +7,7 @@ import {
   loadDeployment,
   MailboxClient,
 } from "@shadowpass/sdk";
-import type { Deployment } from "@shadowpass/sdk";
+import type { ChainLogClient, Deployment } from "@shadowpass/sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import qrcode from "qrcode-terminal";
@@ -45,6 +45,7 @@ export interface RuntimeOptions {
   nowSeconds?: bigint;
   rpcUrl?: string;
   refreshState?: () => Promise<ChainState>;
+  stateRefreshIntervalMs?: number;
 }
 
 export interface McpRuntime {
@@ -57,6 +58,9 @@ export interface McpRuntime {
   maxPayment: bigint;
   nowSeconds?: bigint;
   rpcUrl?: string;
+  chainClient?: PublicClient;
+  stateRefreshIntervalMs: number;
+  lastStateRefreshAt?: number;
   refreshState?: () => Promise<ChainState>;
   refreshPromise?: Promise<void>;
   pairing: ReturnType<typeof buildPairing>;
@@ -71,6 +75,14 @@ function asBigInt(value: string | number | bigint, name: string): bigint {
   } catch {
     throw new McpToolError("invalid_number", `${name} must be a non-negative integer`);
   }
+}
+
+function asNumber(value: string | number, name: string): number {
+  const result = Number(value);
+  if (!Number.isSafeInteger(result) || result < 0) {
+    throw new McpToolError("invalid_number", `${name} must be a non-negative integer`);
+  }
+  return result;
 }
 
 function jsonResult(value: unknown): { content: Array<{ type: "text"; text: string }> } {
@@ -93,11 +105,14 @@ export async function createRuntime(options: RuntimeOptions): Promise<McpRuntime
       deployment = undefined;
     }
   }
-  const mailbox = options.mailbox ?? (deployment?.mailbox ? new MailboxClient(deployment.mailbox) : undefined);
+  const mailboxUrl = process.env.SHADOWPASS_MAILBOX?.trim() || deployment?.mailbox;
+  const mailbox = options.mailbox ?? (mailboxUrl ? new MailboxClient(mailboxUrl) : undefined);
   const maxPayment = options.maxPayment ?? asBigInt(process.env.SHADOWPASS_MAX_PAYMENT ?? "10000000", "SHADOWPASS_MAX_PAYMENT");
   const malicious = options.malicious ?? false;
   const rpcUrl = options.rpcUrl ?? process.env.SHADOWPASS_RPC_URL ?? process.env.ANVIL_RPC_URL;
   const chainClient = rpcUrl ? createPublicClient({ transport: http(rpcUrl) }) : undefined;
+  const stateRefreshIntervalMs = options.stateRefreshIntervalMs
+    ?? asNumber(process.env.SHADOWPASS_STATE_TTL_MS ?? "2000", "SHADOWPASS_STATE_TTL_MS");
   const services: McpServices = { ...options.services };
   const executionQueue = new SerialTaskQueue();
   let context!: McpToolContext;
@@ -146,17 +161,30 @@ export async function createRuntime(options: RuntimeOptions): Promise<McpRuntime
     nowSeconds: options.nowSeconds,
     rpcUrl,
     refreshState: options.refreshState,
+    chainClient,
+    stateRefreshIntervalMs,
     pairing: buildPairing(store),
     context,
   };
 }
 
-async function syncState(deployment: Deployment, rpcUrl: string): Promise<ChainState> {
-  const client = createPublicClient({ transport: http(rpcUrl) });
-  return ChainState.sync({
-    getLogs: (args) => client.getLogs(args as any),
+export function createChainLogClient(client: PublicClient): ChainLogClient {
+  return {
+    getLogs: (args) => client.request({
+      method: "eth_getLogs",
+      params: [{
+        address: args.address,
+        fromBlock: toHex(args.fromBlock),
+        toBlock: args.toBlock === undefined ? "latest" : toHex(args.toBlock),
+        topics: args.topics?.map((topic) => Array.isArray(topic) ? [...topic] : topic),
+      }],
+    }) as Promise<any[]>,
     getBlockNumber: () => client.getBlockNumber(),
-  }, deployment);
+  };
+}
+
+async function syncState(client: PublicClient, deployment: Deployment): Promise<ChainState> {
+  return ChainState.sync(createChainLogClient(client), deployment);
 }
 
 async function syncInbox(runtime: McpRuntime): Promise<void> {
@@ -178,17 +206,19 @@ async function syncInbox(runtime: McpRuntime): Promise<void> {
 }
 
 async function refreshRuntimeOnce(runtime: McpRuntime): Promise<void> {
-  if (runtime.refreshState || (runtime.rpcUrl && runtime.deployment)) {
+  const now = Date.now();
+  const stale = runtime.lastStateRefreshAt === undefined
+    || now - runtime.lastStateRefreshAt >= runtime.stateRefreshIntervalMs;
+  if (stale && (runtime.refreshState || runtime.chainClient && runtime.deployment)) {
     try {
-      runtime.state = runtime.refreshState
-        ? await runtime.refreshState()
-        : await syncState(runtime.deployment!, runtime.rpcUrl!);
+      if (runtime.refreshState) runtime.state = await runtime.refreshState();
+      else if (runtime.state) await runtime.state.update();
+      else runtime.state = await syncState(runtime.chainClient!, runtime.deployment!);
       runtime.context.state = runtime.state;
+      runtime.lastStateRefreshAt = Date.now();
     } catch {
-      runtime.state = undefined;
-      runtime.context.state = undefined;
       process.stderr.write("[shadowpass] chain state unavailable\n");
-      return;
+      if (!runtime.context.state) return;
     }
   }
   if (!runtime.context.state) return;
@@ -287,10 +317,12 @@ export async function runServer(options: RunOptions): Promise<void> {
   if (options.newPairing) await runtime.store.rotatePairing();
   runtime.pairing = buildPairing(runtime.store);
   process.stderr.write(`[shadowpass] agent=${runtime.store.name} dir=${runtime.store.paths.directory}\n`);
-  process.stderr.write(`[shadowpass] pairing code: ${runtime.pairing.code}\n`);
-  process.stderr.write(`[shadowpass] pairing url: ${runtime.pairing.url}\n`);
-  if (!options.noQr) {
-    qrcode.generate(runtime.pairing.url, { small: true }, (qr) => process.stderr.write(`${qr}\n`));
+  if (!runtime.store.isPaired) {
+    process.stderr.write(`[shadowpass] pairing code: ${runtime.pairing.code}\n`);
+    process.stderr.write(`[shadowpass] pairing url: ${runtime.pairing.url}\n`);
+    if (!options.noQr) {
+      qrcode.generate(runtime.pairing.url, { small: true }, (qr) => process.stderr.write(`${qr}\n`));
+    }
   }
   if (options.printPairing) return;
 

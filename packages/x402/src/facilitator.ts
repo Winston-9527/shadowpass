@@ -21,6 +21,8 @@ import {
 } from "./types.js";
 import {
   TransactionRevertedError,
+  TransactionPendingError,
+  TransactionQueueFullError,
   ViemGateClient,
   revertName,
 } from "./viem-gate.js";
@@ -28,12 +30,13 @@ import {
 type NullifierState =
   | { phase: "verified"; expiresAt: number }
   | { phase: "settling"; expiresAt: number; token: symbol }
+  | { phase: "pending"; token: symbol; transaction: Hex }
   | { phase: "settled" };
 
 export class NullifierLock {
   private readonly entries = new Map<string, NullifierState>();
 
-  constructor(private readonly reservationTtlMs = 60_000) {}
+  constructor(private readonly reservationTtlMs = 300_000) {}
 
   markVerified(nullifier: string, now = Date.now()): void {
     const current = this.state(nullifier, now);
@@ -44,7 +47,9 @@ export class NullifierLock {
 
   beginSettle(nullifier: string, now = Date.now()): symbol | undefined {
     const current = this.state(nullifier, now);
-    if (current?.phase === "settling" || current?.phase === "settled") return undefined;
+    if (current?.phase === "settling" || current?.phase === "pending" || current?.phase === "settled") {
+      return undefined;
+    }
     const token = Symbol(nullifier);
     this.entries.set(nullifier, { phase: "settling", token, expiresAt: now + this.reservationTtlMs });
     return token;
@@ -57,6 +62,13 @@ export class NullifierLock {
     return true;
   }
 
+  markPending(nullifier: string, token: symbol, transaction: Hex): boolean {
+    const current = this.entries.get(nullifier);
+    if (current?.phase !== "settling" || current.token !== token) return false;
+    this.entries.set(nullifier, { phase: "pending", token, transaction });
+    return true;
+  }
+
   release(nullifier: string, token: symbol): void {
     const current = this.entries.get(nullifier);
     if (current?.phase === "settling" && current.token === token) this.entries.delete(nullifier);
@@ -65,7 +77,7 @@ export class NullifierLock {
   state(nullifier: string, now = Date.now()): NullifierState | undefined {
     const current = this.entries.get(nullifier);
     if (!current) return undefined;
-    if (current.phase !== "settled" && current.expiresAt <= now) {
+    if ((current.phase === "verified" || current.phase === "settling") && current.expiresAt <= now) {
       this.entries.delete(nullifier);
       return undefined;
     }
@@ -194,7 +206,7 @@ export class ShadowpassFacilitatorCore {
   private readonly chainView: PaymentChainView;
   private readonly signers: Address[];
   private readonly clockSkewSeconds: number;
-  private readonly lock = new NullifierLock();
+  private readonly lock: NullifierLock;
   private readonly rateLimiter: MerchantRateLimiter;
   private readonly stateRegistrations = new Map<string, Promise<void>>();
 
@@ -206,6 +218,7 @@ export class ShadowpassFacilitatorCore {
     this.rateLimiter = new MerchantRateLimiter(
       options.merchantRateLimit ?? { limit: 60, windowMs: 60_000 },
     );
+    this.lock = new NullifierLock(options.settlementLockTtlMs ?? 300_000);
   }
 
   getExtra(_network: Network): undefined {
@@ -296,10 +309,19 @@ export class ShadowpassFacilitatorCore {
         },
       };
     } catch (error) {
+      if (error instanceof TransactionPendingError && this.lock.markPending(
+        parsed.budget.budgetNf,
+        token,
+        error.transaction,
+      )) {
+        return this.failed("transaction_pending", requirements.network, error.transaction);
+      }
       this.lock.release(parsed.budget.budgetNf, token);
       const reason = error instanceof TransactionRevertedError
         ? "transaction_reverted"
-        : `settlement_failed:${revertName(error) ?? "unknown"}`;
+        : error instanceof TransactionQueueFullError
+          ? "transaction_queue_full"
+          : `settlement_failed:${revertName(error) ?? "unknown"}`;
       return this.failed(reason, requirements.network);
     }
   }
@@ -321,8 +343,8 @@ export class ShadowpassFacilitatorCore {
     return await this.chainView.clockSkewSeconds?.() ?? this.clockSkewSeconds;
   }
 
-  private failed(errorReason: string, network: Network): SettleResponse {
-    return { success: false, errorReason, transaction: "", network };
+  private failed(errorReason: string, network: Network, transaction = ""): SettleResponse {
+    return { success: false, errorReason, transaction, network };
   }
 }
 
@@ -332,6 +354,7 @@ export interface ShadowpassFacilitatorConfig {
   deployment: Deployment;
   clockSkewSeconds?: number;
   merchantRateLimit?: { limit: number; windowMs: number };
+  settlementLockTtlMs?: number;
 }
 
 export class ShadowpassFacilitatorScheme
@@ -351,6 +374,7 @@ export class ShadowpassFacilitatorScheme
       signers: [address],
       clockSkewSeconds: config.clockSkewSeconds,
       merchantRateLimit: config.merchantRateLimit,
+      settlementLockTtlMs: config.settlementLockTtlMs,
     });
   }
 

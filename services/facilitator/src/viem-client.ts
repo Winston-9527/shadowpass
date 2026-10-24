@@ -12,6 +12,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import type { Deployment } from "@shadowpass/sdk";
 import {
   createSerializedSender,
+  gateAbi as x402GateAbi,
   revertName,
   shadowErrorAbi,
   type RelayAction,
@@ -30,6 +31,9 @@ const gateAbi = [...shadowErrorAbi, ...parseAbi([
   "function issue(uint256 certHash)",
   "function transferBudget((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 noteRoot,uint256 revokedRoot,uint256 nullifier,uint256 cm1,uint256 cm2,bytes memo1,bytes memo2)",
   "function registerState(uint256 issued,uint256 revoked,uint256 root) returns (uint256)",
+] as const)] as const;
+const treasuryAbi = [...shadowErrorAbi, ...parseAbi([
+  "function withdraw(uint256 positionId)",
 ] as const)] as const;
 const revocationsAbi = [...shadowErrorAbi, ...parseAbi([
   "function revoke((uint256[2] a,uint256[2][2] b,uint256[2] c) proof,uint256 newRoot,uint256 entry)",
@@ -64,33 +68,86 @@ export class RelayRevertError extends Error {
   }
 }
 
+export class RelayInFlightError extends Error {
+  constructor(readonly lockKey: string) {
+    super("operation_in_progress");
+    this.name = "operation_in_progress";
+  }
+}
+
+export function relayLockKey(action: RelayAction, args: Record<string, unknown>): string | undefined {
+  const actionName = String(action);
+  if (actionName === "execute") {
+    const budget = args.budget as Record<string, unknown> | undefined;
+    return budget?.budgetNf === undefined ? undefined : `budget:${String(budget.budgetNf)}`;
+  }
+  if (actionName === "treasuryWithdraw") {
+    return args.positionId === undefined ? undefined : `position:${String(args.positionId)}`;
+  }
+  if (action === "registerState") {
+    return `state:${String(args.issued)}:${String(args.revoked)}:${String(args.root)}`;
+  }
+  const key = action === "transferBudget"
+    ? args.nullifier
+    : action === "faucetDeposit"
+      ? args.cm
+      : action === "issue"
+        ? args.certHash
+        : action === "join"
+          ? args.commitment
+          : action === "register"
+            ? args.leaf0
+            : action === "revoke"
+              ? args.entry
+              : undefined;
+  return key === undefined ? undefined : `${action}:${String(key)}`;
+}
+
 export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRelayClient {
-  const account = options.walletClient.account?.address;
-  if (!account) throw new Error("wallet_account_missing");
+  const account = options.walletClient.account;
+  if (!account?.address) throw new Error("wallet_account_missing");
   const sender = createSerializedSender(options.publicClient, options.walletClient);
+  const inFlight = new Set<string>();
 
   const send = async (
-    simulation: Promise<unknown>,
+    action: RelayAction,
+    args: Record<string, unknown>,
+    simulate: () => Promise<unknown>,
     write: () => Promise<Hex>,
   ): Promise<RelayResult> => {
+    const lockKey = relayLockKey(action, args);
+    if (lockKey && inFlight.has(lockKey)) throw new RelayInFlightError(lockKey);
+    if (lockKey) inFlight.add(lockKey);
     try {
-      await simulation;
-    } catch (error) {
-      throw new RelayRevertError(revertName(error) ?? "unknown");
+      const receipt = await sender.write(async () => {
+        try {
+          await simulate();
+        } catch (error) {
+          throw new RelayRevertError(revertName(error) ?? "unknown");
+        }
+        try {
+          return await write();
+        } catch (error) {
+          const name = revertName(error);
+          if (name) throw new RelayRevertError(name);
+          throw error;
+        }
+      });
+      return {
+        transaction: receipt.transaction,
+        blockNumber: receipt.blockNumber.toString(),
+        logs: receipt.logs.map((log: any) => ({
+          address: String(log.address),
+          topics: Array.isArray(log.topics) ? log.topics.map(String) : [],
+          data: String(log.data),
+          logIndex: String(log.logIndex),
+          transactionHash: String(log.transactionHash),
+          blockNumber: String(log.blockNumber),
+        })),
+      };
+    } finally {
+      if (lockKey) inFlight.delete(lockKey);
     }
-    const receipt = await sender.write(write);
-    return {
-      transaction: receipt.transaction,
-      blockNumber: receipt.blockNumber.toString(),
-      logs: receipt.logs.map((log: any) => ({
-        address: String(log.address),
-        topics: Array.isArray(log.topics) ? log.topics.map(String) : [],
-        data: String(log.data),
-        logIndex: String(log.logIndex),
-        transactionHash: String(log.transactionHash),
-        blockNumber: String(log.blockNumber),
-      })),
-    };
   };
 
   return {
@@ -98,7 +155,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
       switch (action) {
         case "join":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.group,
               abi: groupAbi,
@@ -116,7 +175,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "register":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.registry,
               abi: registryAbi,
@@ -146,7 +207,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "faucetDeposit":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.token,
               abi: tokenAbi,
@@ -164,7 +227,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "issue":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.gate,
               abi: gateAbi,
@@ -182,7 +247,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "transferBudget":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.gate,
               abi: gateAbi,
@@ -218,7 +285,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "revoke":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.revocations,
               abi: revocationsAbi,
@@ -236,7 +305,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "registerState":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.gate,
               abi: gateAbi,
@@ -250,6 +321,74 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
               abi: gateAbi,
               functionName: "registerState",
               args: [BigInt(String(args.issued)), BigInt(String(args.revoked)), BigInt(String(args.root))],
+            }),
+          );
+        case "execute": {
+          const roots = args.roots as Record<string, unknown>;
+          const actionArgs = args.action as Record<string, unknown>;
+          const budget = args.budget as Record<string, unknown>;
+          const callArgs = [
+            args.proof as any,
+            {
+              issued: BigInt(String(roots.issued)),
+              revoked: BigInt(String(roots.revoked)),
+              root: BigInt(String(roots.root)),
+            },
+            BigInt(String(args.nowTs)),
+            {
+              target: String(actionArgs.target) as Address,
+              method: String(actionArgs.method) as Hex,
+              amount: BigInt(String(actionArgs.amount)),
+              nonce: BigInt(String(actionArgs.nonce)),
+              params: String(actionArgs.params) as Hex,
+            },
+            (args.ct as unknown[]).map((value) => BigInt(String(value))),
+            {
+              noteRoot: BigInt(String(budget.noteRoot)),
+              budgetNf: BigInt(String(budget.budgetNf)),
+              cmChange: BigInt(String(budget.cmChange)),
+              qSpent: BigInt(String(budget.qSpent)),
+            },
+            String(args.memoChange) as Hex,
+          ] as const;
+          return send(
+            action,
+            args,
+            () => options.publicClient.simulateContract({
+              account,
+              address: options.deployment.gate,
+              abi: x402GateAbi as any,
+              functionName: "execute",
+              args: callArgs as any,
+            }),
+            () => options.walletClient.writeContract({
+              account,
+              chain: null,
+              address: options.deployment.gate,
+              abi: x402GateAbi as any,
+              functionName: "execute",
+              args: callArgs as any,
+            }),
+          );
+        }
+        case "treasuryWithdraw":
+          return send(
+            action,
+            args,
+            () => options.publicClient.simulateContract({
+              account,
+              address: options.deployment.treasury,
+              abi: treasuryAbi,
+              functionName: "withdraw",
+              args: [BigInt(String(args.positionId))],
+            }),
+            () => options.walletClient.writeContract({
+              account,
+              chain: null,
+              address: options.deployment.treasury,
+              abi: treasuryAbi,
+              functionName: "withdraw",
+              args: [BigInt(String(args.positionId))],
             }),
           );
       }

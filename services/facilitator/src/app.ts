@@ -2,6 +2,9 @@ import express, { type NextFunction, type Request, type RequestHandler, type Res
 import { z } from "zod";
 import {
   RELAY_ACTIONS,
+  TREASURY_METHOD,
+  addressSchema,
+  bytes4Schema,
   hexSchema,
   proofSchema,
   uintSchema,
@@ -9,7 +12,7 @@ import {
   type WalletRelayClient,
 } from "@shadowpass/x402";
 import type { InMemoryLatencyRecorder } from "./metrics.js";
-import { RelayRevertError } from "./viem-client.js";
+import { RelayInFlightError, RelayRevertError } from "./viem-client.js";
 
 const relaySchemas = {
   join: z.object({ commitment: uintSchema }).strict(),
@@ -30,6 +33,30 @@ const relaySchemas = {
   }).strict(),
   revoke: z.object({ proof: proofSchema, newRoot: uintSchema, entry: uintSchema }).strict(),
   registerState: z.object({ issued: uintSchema, revoked: uintSchema, root: uintSchema }).strict(),
+  execute: z.object({
+    proof: proofSchema,
+    roots: z.object({ issued: uintSchema, revoked: uintSchema, root: uintSchema }).strict(),
+    nowTs: uintSchema.refine((value) => BigInt(value) <= (1n << 64n) - 1n, "invalid_uint64"),
+    action: z.object({
+      target: addressSchema,
+      method: bytes4Schema.refine(
+        (value) => value.toLowerCase() === TREASURY_METHOD.toLowerCase(),
+        "pay_must_use_x402",
+      ),
+      amount: uintSchema,
+      nonce: uintSchema,
+      params: hexSchema,
+    }).strict(),
+    ct: z.array(uintSchema).length(8),
+    budget: z.object({
+      noteRoot: uintSchema,
+      budgetNf: uintSchema,
+      cmChange: uintSchema,
+      qSpent: uintSchema,
+    }).strict(),
+    memoChange: hexSchema,
+  }).strict(),
+  treasuryWithdraw: z.object({ positionId: uintSchema }).strict(),
 } satisfies Record<RelayAction, z.ZodTypeAny>;
 
 const verifyBodySchema = z.object({
@@ -133,6 +160,7 @@ export interface FacilitatorAppOptions {
   relayRateLimit?: Partial<RelayRateLimitConfig>;
   paymentRateLimit?: { perMinute?: number };
   corsOrigins?: string[];
+  metricsToken?: string;
   now?: () => number;
 }
 
@@ -176,7 +204,13 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
 
   app.get("/supported", (_request, response) => response.json(options.facilitator.getSupported()));
   app.get("/health", (_request, response) => response.json({ ok: true }));
-  app.get("/metrics", (_request, response) => response.json({ records: options.metrics.list() }));
+  app.get("/metrics", (request, response) => {
+    if (!options.metricsToken || request.headers.authorization !== `Bearer ${options.metricsToken}`) {
+      response.status(404).json({ error: "not_found" });
+      return;
+    }
+    response.json({ records: options.metrics.list() });
+  });
 
   app.post("/verify", asyncHandler(async (request, response) => {
     if (!paymentLimiter.allow(clientIp(request, trustProxyHeaders))) {
@@ -254,6 +288,10 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
       permit.release();
       if (error instanceof RelayRevertError) {
         response.status(400).json({ error: `simulation_failed:${error.revertName}` });
+        return;
+      }
+      if (error instanceof RelayInFlightError) {
+        response.status(409).json({ error: "operation_in_progress" });
         return;
       }
       response.status(502).json({ error: "relay_failed" });

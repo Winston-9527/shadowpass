@@ -5,11 +5,11 @@ Agent 侧 stdio MCP server。它把 Agent 的本地 EdDSA holder 私钥、X25519
 ## 当前能力
 
 - 首次启动生成 holder 私钥、信箱私钥和一次性配对秘密；目录权限 `0700`，文件权限 `0600`，已有过宽权限会被收紧。
-- 在 stderr 打印钱包配对链接、配对码和二维码。stdout 只用于 MCP JSON-RPC。
-- 第一个凭证包必须在密封盒内携带配对秘密；接受后锁定根凭证和主人信箱。后续包必须属于同一主人链，重放、回滚和已花票据会被丢弃。
+- 尚未配对时在 stderr 打印钱包配对链接、配对码和二维码；已配对启动不再输出。stdout 只用于 MCP JSON-RPC。
+- 第一个凭证包必须在密封盒内携带配对秘密；接受后立即轮换配对秘密并锁定根凭证和主人信箱。后续包必须属于同一主人链，重放、回滚和已花票据会被丢弃。
 - 从加密信箱接收凭证包，验证签名、链连续性、链上签发、吊销状态、有效期和票据树成员关系；能力取整条链按位与，有效期取最小值。
-- 每次工具调用前刷新链上状态并同步信箱；链上状态不可用，或可信凭证依赖的链上写入暂时不可见时，保留信箱游标，不消费该凭证包。启动时会从链上票据备忘恢复本地票据。
-- 提供 `wallet_status`、`list_receipts`、`pay`、`treasury_supply`、`treasury_status`、`treasury_withdraw`、`delegate`。
+- 工具调用前按 `SHADOWPASS_STATE_TTL_MS`（默认 2 秒）复用同一个 `ChainState` 并调用 `update()`，同时同步信箱；链上状态不可用，或可信凭证依赖的链上写入暂时不可见时，保留信箱游标，不消费该凭证包。启动时会从链上票据备忘恢复本地票据。
+- 提供 `wallet_status`、`list_receipts`、`pay`、`treasury_supply`、`treasury_status`、`delegate`。
 - `pay` 通过官方 x402 fetch 客户端处理 402：使用 SDK 选票、构造 action 和找零 `memoChange`，生成 D1/D2/D3 证明并在本地验证通过后才提交；`spendControls` 只允许部署中的测试币，并限制单笔金额。
 - `pay` 返回商家响应体（最多 32 KiB），并标记为 `trust: "untrusted"`；付款成功后立即把找零票据写入本地 store。
 - `pay` 和 `treasury_supply` 在执行前本地检查能力位、金额上限和参数；`treasury_supply` 还会检查金库白名单与当前余额。检查失败时不会生成证明或发起网络请求。
@@ -70,6 +70,7 @@ claude mcp add shadowpass -- \
       "env": {
         "SHADOWPASS_NETWORK": "anvil",
         "SHADOWPASS_RPC_URL": "http://127.0.0.1:8545",
+        "SHADOWPASS_MAILBOX": "http://127.0.0.1:8787",
         "SHADOWPASS_ARTIFACTS": "/absolute/path/to/shadowpass/apps/wallet/public/zk/circuits-v2"
       }
     }
@@ -79,7 +80,7 @@ claude mcp add shadowpass -- \
 
 重启客户端后，可以说“帮我买一份报告”；如果 Agent 尚未配对或付款后端未配置，工具会返回明确错误，不会直接付款。
 
-本地 anvil 必须持续出块，建议使用 `anvil --block-time 1`。Gate 的 `nowTs` 使用最新区块时间并限制 60 秒时钟偏差；链空闲过久时，需要先产生新区块，否则付款会因 `BadClock` 失败。
+`scripts/dev-chain.sh` 使用 `anvil --block-time 1`。`SHADOWPASS_MAILBOX` 可覆盖部署文件中的信箱地址，便于本地联调。Gate 的 `nowTs` 使用最新区块时间并读取链上时钟偏差；链空闲过久时，需要先产生新区块，否则付款会因 `BadClock` 失败。
 
 ## 本地数据
 

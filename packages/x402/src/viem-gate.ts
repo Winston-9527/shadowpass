@@ -37,11 +37,20 @@ export const shadowErrorAbi = parseAbi([
   "error ZeroAddress()",
   "error ZeroAmount()",
   "error FaucetLimit()",
+  "error FaucetAmountTooHigh()",
   "error UnknownGroupRoot()",
   "error AlreadyRegistered()",
   "error LeafRetired()",
   "error NotGate()",
   "error ZeroPayTo()",
+  "error UnknownPosition()",
+  "error AlreadyWithdrawn()",
+  "error BeforeMaturity()",
+  "error ZeroTerm()",
+  "error ZeroExpectedQ()",
+  "error ZeroShares()",
+  "error MissingFunds()",
+  "error ExpectedQTooHigh()",
 ] as const);
 
 const proofComponents = [
@@ -50,7 +59,7 @@ const proofComponents = [
   { name: "c", type: "uint256[2]" },
 ] as const;
 
-const gateAbi = [
+export const gateAbi = [
   ...shadowErrorAbi,
   {
     type: "function",
@@ -143,25 +152,64 @@ export class TransactionRevertedError extends Error {
   }
 }
 
+export class TransactionPendingError extends Error {
+  constructor(readonly transaction: Hex, cause?: unknown) {
+    super("transaction_pending", { cause });
+    this.name = "transaction_pending";
+  }
+}
+
+export class TransactionQueueFullError extends Error {
+  constructor() {
+    super("transaction_queue_full");
+    this.name = "transaction_queue_full";
+  }
+}
+
 const walletQueues = new Map<string, Promise<unknown>>();
+const walletQueueSizes = new Map<string, number>();
 
 export interface SerializedTransactionSender {
   write(write: () => Promise<Hex>): Promise<TransactionResult>;
 }
 
+export interface SerializedTransactionSenderOptions {
+  receiptPollingIntervalMs?: number;
+  maxQueueLength?: number;
+}
+
 export function createSerializedSender(
   publicClient: PublicClient,
   walletClient: WalletClient,
+  options: SerializedTransactionSenderOptions = {},
 ): SerializedTransactionSender {
   const address = walletClient.account?.address;
   if (!address) throw new Error("wallet_account_missing");
   const key = address.toLowerCase();
+  const maxQueueLength = options.maxQueueLength ?? 64;
+  const receiptPollingIntervalMs = options.receiptPollingIntervalMs ?? 300;
+  if (!Number.isSafeInteger(maxQueueLength) || maxQueueLength < 1) throw new Error("maxQueueLength must be positive");
+  if (!Number.isSafeInteger(receiptPollingIntervalMs) || receiptPollingIntervalMs < 250) {
+    throw new Error("receiptPollingIntervalMs must be at least 250");
+  }
   return {
     async write(write) {
+      const queued = walletQueueSizes.get(key) ?? 0;
+      if (queued >= maxQueueLength) throw new TransactionQueueFullError();
+      walletQueueSizes.set(key, queued + 1);
       const previous = walletQueues.get(key) ?? Promise.resolve();
       const current = previous.catch(() => undefined).then(async () => {
         const transaction = await write();
-        const receipt = await publicClient.waitForTransactionReceipt({ hash: transaction, confirmations: 1 });
+        let receipt;
+        try {
+          receipt = await publicClient.waitForTransactionReceipt({
+            hash: transaction,
+            confirmations: 1,
+            pollingInterval: receiptPollingIntervalMs,
+          });
+        } catch (error) {
+          throw new TransactionPendingError(transaction, error);
+        }
         if (receipt.status !== "success") throw new TransactionRevertedError(transaction);
         return {
           transaction,
@@ -174,6 +222,9 @@ export function createSerializedSender(
         return await current;
       } finally {
         if (walletQueues.get(key) === current) walletQueues.delete(key);
+        const remaining = (walletQueueSizes.get(key) ?? 1) - 1;
+        if (remaining > 0) walletQueueSizes.set(key, remaining);
+        else walletQueueSizes.delete(key);
       }
     },
   };

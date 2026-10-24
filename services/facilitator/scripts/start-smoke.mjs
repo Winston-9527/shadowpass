@@ -13,6 +13,7 @@ const child = spawn(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "s
     FACILITATOR_PK: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
     RELAY_FAUCET_PER_DAY: "3",
     FACILITATOR_CORS_ORIGINS: "https://wallet.example",
+    FACILITATOR_METRICS_TOKEN: "smoke-metrics-token",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -50,7 +51,7 @@ function inspect(chunk) {
       continue;
     }
     if (event.type !== "shadowpass.facilitator.started" || finished) continue;
-    if (event.relayFaucetPerDay !== 3) continue;
+    if (event.relayFaucetPerDay !== 3 || event.host !== "127.0.0.1") continue;
     if (!event.corsOrigins?.includes("https://wallet.example")) continue;
 
     finished = true;
@@ -60,11 +61,22 @@ function inspect(chunk) {
         if (!response.ok) throw new Error(`health returned ${response.status}`);
         const body = await response.json();
         if (body.ok !== true) throw new Error("health response was not ok");
+        const [privateMetrics, metrics] = await Promise.all([
+          fetch(`http://127.0.0.1:${event.port}/metrics`),
+          fetch(`http://127.0.0.1:${event.port}/metrics`, {
+            headers: { authorization: "Bearer smoke-metrics-token" },
+          }),
+        ]);
+        if (privateMetrics.status !== 404 || metrics.status !== 200) {
+          throw new Error("metrics access control failed");
+        }
         console.log(JSON.stringify({
           result: "ok",
           port: event.port,
+          host: event.host,
           relayFaucetPerDay: event.relayFaucetPerDay,
           corsOrigins: event.corsOrigins,
+          metricsPrivate: true,
         }));
       })
       .catch((error) => {

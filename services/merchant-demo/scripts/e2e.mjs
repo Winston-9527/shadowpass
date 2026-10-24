@@ -103,6 +103,7 @@ const facilitatorApp = createFacilitatorApp({
   },
   relay,
   metrics,
+  metricsToken: "e2e-metrics-token",
 });
 const facilitator = await listen(facilitatorApp);
 const merchant = createMerchantApp({
@@ -154,6 +155,7 @@ function builder({ budgetNf = "4242", nonce = "42", memoChange = "0x01", tampere
 
 const paidFetch = wrapFetchWithPayment(fetch, createShadowpassClient({
   builder: builder(),
+  network: NETWORK,
   spendControls: {
     allowedAssets: [{ network: NETWORK, asset: ASSET, maxAmountPerPayment: "2000000" }],
   },
@@ -165,6 +167,7 @@ const replay = await paidFetch(reportUrl);
 // Same payTo + URL + amount, different nullifier: Payout must not deduplicate reqHash.
 const secondPayment = wrapFetchWithPayment(fetch, createShadowpassClient({
   builder: builder({ budgetNf: "4243", nonce: "43", memoChange: "0x02" }),
+  network: NETWORK,
   spendControls: {
     allowedAssets: [{ network: NETWORK, asset: ASSET, maxAmountPerPayment: "2000000" }],
   },
@@ -173,6 +176,7 @@ const secondPaid = await secondPayment(reportUrl);
 
 const tampered = await wrapFetchWithPayment(fetch, createShadowpassClient({
   builder: builder({ budgetNf: "4244", nonce: "44", tamperedPayTo: true }),
+  network: NETWORK,
   spendControls: {
     allowedAssets: [{ network: NETWORK, asset: ASSET, maxAmountPerPayment: "2000000" }],
   },
@@ -194,6 +198,7 @@ let unavailableBody;
 try {
   unavailable = await wrapFetchWithPayment(fetch, createShadowpassClient({
     builder: builder({ budgetNf: "4245", nonce: "45" }),
+    network: NETWORK,
     spendControls: {
       allowedAssets: [{ network: NETWORK, asset: ASSET, maxAmountPerPayment: "2000000" }],
     },
@@ -227,7 +232,9 @@ const oldDeposit = await fetch(`${facilitator.url}/relay/deposit`, {
   body: JSON.stringify({ args: {} }),
 });
 
-const metricsBody = await (await fetch(`${facilitator.url}/metrics`)).json();
+const metricsBody = await (await fetch(`${facilitator.url}/metrics`, {
+  headers: { authorization: "Bearer e2e-metrics-token" },
+})).json();
 const result = {
   unpaidStatus: unpaid.status,
   paidStatus: paid.status,
