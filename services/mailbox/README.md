@@ -29,7 +29,8 @@ GET  /health                                         -> {"ok":true}
 - 设置后：使用 Upstash REST；也兼容 `KV_REST_API_URL` / `KV_REST_API_TOKEN` 和 `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`。
 - SQLite 路径由 `MAILBOX_DB_PATH` 指定。
 
-线上部署时使用 Upstash，不要依赖实例本地磁盘。
+线上部署时使用 Upstash，不要依赖实例本地磁盘。生产地址为
+`https://shadowpass-mailbox.vercel.app`。
 
 ```bash
 MAILBOX_KV_URL=https://example.upstash.io \
@@ -41,15 +42,30 @@ npm run start -w @shadowpass/mailbox
 Vercel 入口在 `services/mailbox/api/`，`vercel.json` 把 `/box/*`、`/slot/*` 和 `/health` 转发到函数。项目 Root Directory 设为 `services/mailbox`，至少配置：
 
 ```text
-MAILBOX_KV_URL
-MAILBOX_KV_TOKEN
+KV_REST_API_URL
+KV_REST_API_TOKEN
 MAILBOX_TRUSTED_PROXY_HEADER=x-real-ip
+MAILBOX_CORS_ORIGIN=https://shadowpass-wallet.vercel.app
 ```
 
+Upstash 的 Vercel Marketplace 集成会向 Production 和 Preview 注入
+`KV_REST_API_URL` / `KV_REST_API_TOKEN`。Mailbox 也兼容
+`MAILBOX_KV_URL` / `MAILBOX_KV_TOKEN` 和
+`UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`。
+
+仓库根目录已有钱包的 `vercel.json`，因此不要复用默认配置，显式传入
+Mailbox 的配置：
+
 ```bash
-cd services/mailbox
-npx vercel --prod
+npx vercel link --project shadowpass-mailbox
+npx vercel build --prod -A services/mailbox/vercel.json
+npx vercel deploy --prebuilt --prod -A services/mailbox/vercel.json
+curl -fsS https://shadowpass-mailbox.vercel.app/health
 ```
+
+若域名被 Vercel Deployment Protection 的 SSO 拦截，浏览器会收到登录页而
+不是 Mailbox 的 JSON 响应；必要时执行
+`npx vercel project protection disable shadowpass-mailbox --sso`。
 
 ## 限制
 
