@@ -30,6 +30,7 @@
 |---|---|
 | Touch ID / PRF 不可用 | 切到已经验证的 Chrome + Google 密码管理器；Safari 作为备用但需提前测试。 |
 | Claude Desktop 未连接到 MCP | 用已输出 Claude Code 命令重启客户端；或使用 `npm run test:mvp` 展示真实 MCP stdio E2E。 |
+| 配对链接打开了生产钱包 | 改用终端输出的 `http://localhost:4173/pair#...`，或直接粘贴配对码。 |
 | 本地链或 facilitator 异常 | 停止并重新执行 `npm run demo:mvp`；产物缓存会复用。 |
 | 现场时间不足 | 直接播放 `docs/demo/demo.webm`，并明确说明那是协议层演示，不是钱包+MCP 录屏。 |
 

@@ -18,7 +18,7 @@ SHADOWPASS_PTAU=/absolute/path/to/powersOfTau28_hez_final_18.ptau \
 1. 编译并 setup `main_d2`、`main_reg`、`main_revoke`、`budget_transfer`、`budget_mint`。
 2. 启动 `anvil --block-time 1`，部署合约，并由 facilitator 预置 20 个金额 8–99 spUSD 的匿名集存款。
 3. 启动 facilitator、SQLite 信箱、x402 商家和钱包 preview。
-4. 创建 buyer/treasury 两个本地 MCP store，输出 Claude Code 命令、Claude Desktop JSON 和两个配对链接。
+4. 创建 buyer/treasury 两个本地 MCP store，输出 Claude Code 命令、Claude Desktop JSON、`localhost:4173` 配对链接和配对码。
 
 默认地址：
 
@@ -53,7 +53,8 @@ VITE_TRUST_LOCAL_ARTIFACTS=1
 - `SHADOWPASS_ARTIFACTS`
 - `SHADOWPASS_MAX_PAYMENT`
 
-在钱包中分别使用输出的 buyer、treasury 配对链接或配对码发卡。详细逐步操作见 [SCRIPT.md](SCRIPT.md)。
+在钱包中分别使用输出的 buyer、treasury 本地配对链接或配对码发卡。不要使用生产
+`shadowpass-wallet.vercel.app` 地址联调本地服务。详细逐步操作见 [SCRIPT.md](SCRIPT.md)。
 
 ## 无界面 E2E
 

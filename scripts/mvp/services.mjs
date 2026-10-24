@@ -158,9 +158,12 @@ export function printMcpConfiguration(context) {
   console.log(claudeCommand("treasury", treasury));
   console.log("\nClaude Desktop JSON:\n");
   console.log(JSON.stringify(desktop, null, 2));
-  console.log("\n配对链接:\n");
-  console.log(`buyer:    ${context.pairings.buyer.url}`);
-  console.log(`treasury: ${context.pairings.treasury.url}`);
+  console.log("\n本地钱包配对链接:\n");
+  console.log(`buyer:    ${context.walletUrl}/pair#${context.pairings.buyer.code}`);
+  console.log(`treasury: ${context.walletUrl}/pair#${context.pairings.treasury.code}`);
+  console.log("\n配对码:\n");
+  console.log(`buyer:    ${context.pairings.buyer.code}`);
+  console.log(`treasury: ${context.pairings.treasury.code}`);
 }
 
 export async function startMvp({ e2e = false } = {}) {
