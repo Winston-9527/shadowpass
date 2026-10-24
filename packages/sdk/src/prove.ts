@@ -60,6 +60,7 @@ export interface LoadArtifactsOptions {
   dir?: string;
   baseUrl?: string;
   trustedHashes?: Readonly<Record<string, string>>;
+  trustManifestHashes?: boolean;
 }
 
 function parseManifest(text: string): Map<string, string> {
@@ -109,6 +110,9 @@ export async function loadArtifacts(options: LoadArtifactsOptions): Promise<Arti
   const manifestBytes = await readArtifact(resolved, "MANIFEST.sha256");
   const manifest = new TextDecoder().decode(manifestBytes);
   const entries = parseManifest(manifest);
+  const processEnv = (globalThis as any).process?.env;
+  const trustManifestHashes = options.trustManifestHashes
+    ?? (Boolean(resolved.dir) && processEnv?.SHADOWPASS_TRUST_LOCAL_ARTIFACTS === "1");
   const trustedHashes = options.trustedHashes ?? ARTIFACT_HASHES;
   const wasmName = `${options.circuit}.wasm`;
   const zkeyName = `${options.circuit}.zkey`;
@@ -123,7 +127,8 @@ export async function loadArtifacts(options: LoadArtifactsOptions): Promise<Arti
     [zkeyName, zkey],
     [vkName, vkBytes],
   ] as const) {
-    const expected = trustedHashes[filename] ?? (filename === wasmName ? entries.get(filename) : undefined);
+    const expected = options.trustedHashes?.[filename]
+      ?? (filename === wasmName || trustManifestHashes ? entries.get(filename) : trustedHashes[filename]);
     if (!expected) throw new Error(`no trusted hash for ${filename}`);
     const actual = await sha256(bytes);
     if (actual !== expected) throw new Error(`${filename} hash mismatch`);

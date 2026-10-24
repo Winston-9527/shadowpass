@@ -23,7 +23,11 @@ export class SnarkProofService implements ProofService {
   async prove(circuit: CircuitName, input: Record<string, unknown>): Promise<CalldataProof> {
     let artifacts = this.artifacts.get(circuit);
     if (!artifacts) {
-      artifacts = loadArtifacts({ circuit, baseUrl: this.baseUrl });
+      artifacts = loadArtifacts({
+        circuit,
+        baseUrl: this.baseUrl,
+        trustManifestHashes: import.meta.env.VITE_TRUST_LOCAL_ARTIFACTS === "1",
+      });
       this.artifacts.set(circuit, artifacts);
     }
     const result = await prove(circuit, input, await artifacts);

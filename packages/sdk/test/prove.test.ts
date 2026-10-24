@@ -19,6 +19,8 @@ describe("artifact loading", () => {
       .join("\n");
     await writeFile(join(dir, "MANIFEST.sha256"), `${manifest}\n`);
     await expect(loadArtifacts({ dir, circuit: "budget_mint" })).rejects.toThrow(/hash mismatch/);
+    const local = await loadArtifacts({ dir, circuit: "budget_mint", trustManifestHashes: true });
+    expect(local.zkey).toEqual(files["budget_mint.zkey"]);
     const trustedHashes = Object.fromEntries(
       Object.entries(files).map(([name, bytes]) => [name, createHash("sha256").update(bytes).digest("hex")]),
     );

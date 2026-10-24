@@ -11,11 +11,14 @@ export const CIRCUITS = [
   "budget_mint",
 ];
 
+export const MVP_CIRCUITS = [...CIRCUITS, "main_revoke"];
+
 const VERIFIERS = {
   main_d2: "ShadowVerifierD2.sol",
   main_reg: "ShadowRegisterVerifier.sol",
   budget_transfer: "ShadowBudgetTransferVerifier.sol",
   budget_mint: "ShadowBudgetMintVerifier.sol",
+  main_revoke: "ShadowRevokeVerifier.sol",
 };
 
 const PTAU_NAME = "powersOfTau28_hez_final_18.ptau";
@@ -44,8 +47,8 @@ function sameFileHash(file, expected) {
   return fs.existsSync(file) && sha256(fs.readFileSync(file)) === expected;
 }
 
-function artifactPaths(buildDir, zkDir) {
-  return CIRCUITS.map((circuit) => ({
+function artifactPaths(buildDir, zkDir, circuits) {
+  return circuits.map((circuit) => ({
     circuit,
     wasm: path.join(buildDir, circuit, `${circuit}_js`, `${circuit}.wasm`),
     zkey: path.join(buildDir, "zk", `${circuit}.zkey`),
@@ -54,12 +57,12 @@ function artifactPaths(buildDir, zkDir) {
   }));
 }
 
-function validSource(buildDir, zkDir) {
+function validSource(buildDir, zkDir, circuits) {
   const manifestFile = path.join(zkDir, "MANIFEST.sha256");
   if (!fs.existsSync(manifestFile)) return undefined;
   const manifest = fs.readFileSync(manifestFile, "utf8");
   const hashes = parseManifest(manifest);
-  for (const artifact of artifactPaths(buildDir, zkDir)) {
+  for (const artifact of artifactPaths(buildDir, zkDir, circuits)) {
     if (![artifact.wasm, artifact.zkey, artifact.vk, artifact.verifier].every(fs.existsSync)) return undefined;
     if (!sameFileHash(artifact.zkey, hashes.get(path.basename(artifact.zkey)))) return undefined;
     if (!sameFileHash(artifact.vk, hashes.get(path.basename(artifact.vk)))) return undefined;
@@ -98,20 +101,20 @@ export function circuitSourceFingerprint(root) {
   return hash.digest("hex");
 }
 
-function validRuntime(runtimeDir, fingerprint) {
+function validRuntime(runtimeDir, fingerprint, circuits) {
   const markerFile = path.join(runtimeDir, "SOURCE.sha256");
   const manifestFile = path.join(runtimeDir, "MANIFEST.sha256");
   if (!fs.existsSync(markerFile) || !fs.existsSync(manifestFile)) return undefined;
   if (fs.readFileSync(markerFile, "utf8").trim() !== fingerprint) return undefined;
   const manifest = fs.readFileSync(manifestFile, "utf8");
   const hashes = parseManifest(manifest);
-  for (const circuit of CIRCUITS) {
+  for (const circuit of circuits) {
     for (const name of [`${circuit}.wasm`, `${circuit}.zkey`, `vk_${circuit}.json`]) {
       if (!sameFileHash(path.join(runtimeDir, name), hashes.get(name))) return undefined;
     }
   }
   const verifierOverridesDir = path.join(path.dirname(runtimeDir), "verifiers");
-  for (const circuit of CIRCUITS) {
+  for (const circuit of circuits) {
     const name = VERIFIERS[circuit];
     if (!sameFileHash(path.join(verifierOverridesDir, name), hashes.get(name))) return undefined;
   }
@@ -123,9 +126,9 @@ function validRuntime(runtimeDir, fingerprint) {
   };
 }
 
-function materialize(source, runtimeDir, fingerprint, generatedVerifiers = false) {
+function materialize(source, runtimeDir, fingerprint, circuits, generatedVerifiers = false) {
   fs.mkdirSync(runtimeDir, { recursive: true });
-  const artifacts = artifactPaths(source.buildDir, source.zkDir);
+  const artifacts = artifactPaths(source.buildDir, source.zkDir, circuits);
   const manifestHashes = Object.fromEntries(source.hashes);
   for (const artifact of artifacts) {
     manifestHashes[path.basename(artifact.wasm)] = sha256(fs.readFileSync(artifact.wasm));
@@ -293,11 +296,12 @@ async function ensurePtau(root) {
   return file;
 }
 
-export async function ensureDemoArtifacts(root) {
-  const runtimeRoot = path.join(root, "scripts", "demo", ".runtime");
+export async function ensureDemoArtifacts(root, options = {}) {
+  const circuits = options.circuits ?? CIRCUITS;
+  const runtimeRoot = options.runtimeRoot ?? path.join(root, "scripts", "demo", ".runtime");
   const runtimeDir = path.join(runtimeRoot, "artifacts");
-  const fingerprint = circuitSourceFingerprint(root);
-  const cached = validRuntime(runtimeDir, fingerprint);
+  const fingerprint = `${circuitSourceFingerprint(root)}:${circuits.join(",")}`;
+  const cached = validRuntime(runtimeDir, fingerprint, circuits);
   if (cached) return cached;
 
   const explicit = process.env.SHADOWPASS_BUILD_DIR
@@ -311,25 +315,25 @@ export async function ensureDemoArtifacts(root) {
       };
 
   if (process.env.SHADOWPASS_BUILD_DIR && process.env.SHADOWPASS_TRUST_BUILD === "1") {
-    const existing = validSource(explicit.buildDir, explicit.zkDir);
-    if (existing) return materialize(existing, runtimeDir, fingerprint, true);
+    const existing = validSource(explicit.buildDir, explicit.zkDir, circuits);
+    if (existing) return materialize(existing, runtimeDir, fingerprint, circuits, true);
   }
 
   const zkDir = path.join(root, "circuits", "zk");
   const generatedNames = [
     "MANIFEST.sha256",
-    ...CIRCUITS.flatMap((circuit) => [`vk_${circuit}.json`, VERIFIERS[circuit]]),
+    ...circuits.flatMap((circuit) => [`vk_${circuit}.json`, VERIFIERS[circuit]]),
   ];
   const snapshot = snapshotFiles(zkDir, generatedNames);
 
   try {
     await ensurePtau(root);
-    const circuitEnv = { ...process.env, CIRCUITS: CIRCUITS.join(" ") };
+    const circuitEnv = { ...process.env, CIRCUITS: circuits.join(" ") };
     run("npm", ["run", "build", "-w", "@shadowpass/circuits"], root, circuitEnv);
     run("npm", ["run", "setup", "-w", "@shadowpass/circuits"], root, circuitEnv);
-    const generated = validSource(path.join(root, "circuits", "build"), zkDir);
+    const generated = validSource(path.join(root, "circuits", "build"), zkDir, circuits);
     if (!generated) throw new Error("generated circuit artifacts did not match their manifest");
-    return materialize(generated, runtimeDir, fingerprint, true);
+    return materialize(generated, runtimeDir, fingerprint, circuits, true);
   } finally {
     restoreFiles(zkDir, snapshot, generatedNames);
   }

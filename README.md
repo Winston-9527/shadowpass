@@ -85,6 +85,7 @@ flowchart LR
 - [共享接口规范](docs/INTERFACES.md)：所有工单共同的约定
 - [部署](docs/DEPLOY.md)：Vercel 项目配置、证明产物托管、常见报错
 - [端到端演示](docs/demo/README.md)：一键启动、模拟匿名集、浏览器验收、剧本与答辩材料
+- [MVP 产品演示](docs/mvp/README.md)：钱包 PWA + 两个 MCP + facilitator + 信箱 + 商家的完整本地链路
 - [开发 Agent 工作约定](AGENTS.md)
 - 工作拆分：见 Issues，总览在 tracking issue
 

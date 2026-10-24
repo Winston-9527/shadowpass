@@ -9,6 +9,7 @@ interface ImportMetaEnv {
   readonly VITE_DEPLOYMENT_URL?: string;
   readonly VITE_FACILITATOR_URL?: string;
   readonly VITE_SHADOWPASS_ARTIFACTS?: string;
+  readonly VITE_TRUST_LOCAL_ARTIFACTS?: string;
 }
 
 interface ImportMeta {

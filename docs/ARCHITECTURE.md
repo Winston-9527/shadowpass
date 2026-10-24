@@ -97,6 +97,7 @@ flowchart TD
   本地生成的产物，则把同一目录布局托管到不可变版本的 OSS/GitHub Release，并用
   `VITE_SHADOWPASS_ARTIFACTS` 和 `SHADOWPASS_ARTIFACTS` 指向该根 URL。zkey 不是秘密。
 - MCP、facilitator、浏览器都通过 `SHADOWPASS_ARTIFACTS`（URL 或本地目录）加载。`sdk.prove.loadArtifacts` 校验 zkey/vk 时，**以 SDK 内置的哈希表为准**（由 `scripts/generate-artifact-hashes.mjs` 从仓库里提交的 `circuits/zk/MANIFEST.sha256` 生成），不能只信托管方返回的 MANIFEST，否则恶意托管方可以同时替换 zkey、vk 和 MANIFEST。
+- 唯一例外是本机生成的临时 demo 产物：显式设置 `SHADOWPASS_TRUST_LOCAL_ARTIFACTS=1`（钱包构建同时设置 `VITE_TRUST_LOCAL_ARTIFACTS=1`）后，可信任本地目录里的 MANIFEST，因为每次本地 phase-2 setup 都会生成新的 zkey。远程 URL 和生产环境不得默认启用。
 - 改了电路就升版本号，verifier 同步重新部署。当前版本是 `circuits-v2`（A2）；`.env.example` 的默认值同步改为 v2。
 
 ## 5. 配置
