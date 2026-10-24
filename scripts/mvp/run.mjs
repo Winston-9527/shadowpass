@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { printMcpConfiguration, startMvp, writeRuntimeManifest } from "./services.mjs";
+import { printClaudeInstructions, startMvp, writeRuntimeManifest } from "./services.mjs";
 
 const e2e = process.argv.includes("--e2e");
 const context = await startMvp({ e2e });
@@ -31,7 +31,7 @@ try {
     },
   }, null, 2));
   writeRuntimeManifest(context);
-  printMcpConfiguration(context);
+  printClaudeInstructions(context);
 
   if (e2e) {
     const { runMvpE2e } = await import("./e2e.mjs");

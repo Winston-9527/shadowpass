@@ -164,25 +164,10 @@ export function writeRuntimeManifest(context) {
   return file;
 }
 
-export function printMcpConfiguration(context) {
-  const buyer = mcpConfiguration(context, "buyer");
-  const treasury = mcpConfiguration(context, "treasury");
-  const claudeCommand = (name, config) => [
-    "claude mcp add", `shadowpass-${name}`,
-    ...Object.entries(config.env).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
-    "--", config.command, ...config.args.map((value) => JSON.stringify(value)),
-  ].join(" ");
-  const desktop = {
-    mcpServers: {
-      "shadowpass-buyer": buyer,
-      "shadowpass-treasury": treasury,
-    },
-  };
-  console.log("\nClaude Code:\n");
-  console.log(claudeCommand("buyer", buyer));
-  console.log(claudeCommand("treasury", treasury));
-  console.log("\nClaude Desktop JSON:\n");
-  console.log(JSON.stringify(desktop, null, 2));
+export function printClaudeInstructions(context) {
+  console.log("\nClaude Code（单主 Agent，两个子 Agent）:\n");
+  console.log("npm run claude:mvp");
+  console.log("\n主 Agent 只负责调度；buyer 与 treasury MCP 分别加载在对应 subagent 内。");
   console.log("\n本地钱包配对链接:\n");
   console.log(`buyer:    ${context.walletUrl}/pair#${context.pairings.buyer.code}`);
   console.log(`treasury: ${context.walletUrl}/pair#${context.pairings.treasury.code}`);
