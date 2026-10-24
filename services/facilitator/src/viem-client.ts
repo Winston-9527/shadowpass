@@ -64,33 +64,86 @@ export class RelayRevertError extends Error {
   }
 }
 
+export class RelayInFlightError extends Error {
+  constructor(readonly lockKey: string) {
+    super("relay_in_flight");
+    this.name = "relay_in_flight";
+  }
+}
+
+export function relayLockKey(action: RelayAction, args: Record<string, unknown>): string | undefined {
+  const actionName = String(action);
+  if (actionName === "execute") {
+    const budget = args.budget as Record<string, unknown> | undefined;
+    return budget?.budgetNf === undefined ? undefined : `budget:${String(budget.budgetNf)}`;
+  }
+  if (actionName === "treasuryWithdraw") {
+    return args.positionId === undefined ? undefined : `position:${String(args.positionId)}`;
+  }
+  if (action === "registerState") {
+    return `state:${String(args.issued)}:${String(args.revoked)}:${String(args.root)}`;
+  }
+  const key = action === "transferBudget"
+    ? args.nullifier
+    : action === "faucetDeposit"
+      ? args.cm
+      : action === "issue"
+        ? args.certHash
+        : action === "join"
+          ? args.commitment
+          : action === "register"
+            ? args.leaf0
+            : action === "revoke"
+              ? args.entry
+              : undefined;
+  return key === undefined ? undefined : `${action}:${String(key)}`;
+}
+
 export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRelayClient {
-  const account = options.walletClient.account?.address;
-  if (!account) throw new Error("wallet_account_missing");
+  const account = options.walletClient.account;
+  if (!account?.address) throw new Error("wallet_account_missing");
   const sender = createSerializedSender(options.publicClient, options.walletClient);
+  const inFlight = new Set<string>();
 
   const send = async (
-    simulation: Promise<unknown>,
+    action: RelayAction,
+    args: Record<string, unknown>,
+    simulate: () => Promise<unknown>,
     write: () => Promise<Hex>,
   ): Promise<RelayResult> => {
+    const lockKey = relayLockKey(action, args);
+    if (lockKey && inFlight.has(lockKey)) throw new RelayInFlightError(lockKey);
+    if (lockKey) inFlight.add(lockKey);
     try {
-      await simulation;
-    } catch (error) {
-      throw new RelayRevertError(revertName(error) ?? "unknown");
+      const receipt = await sender.write(async () => {
+        try {
+          await simulate();
+        } catch (error) {
+          throw new RelayRevertError(revertName(error) ?? "unknown");
+        }
+        try {
+          return await write();
+        } catch (error) {
+          const name = revertName(error);
+          if (name) throw new RelayRevertError(name);
+          throw error;
+        }
+      });
+      return {
+        transaction: receipt.transaction,
+        blockNumber: receipt.blockNumber.toString(),
+        logs: receipt.logs.map((log: any) => ({
+          address: String(log.address),
+          topics: Array.isArray(log.topics) ? log.topics.map(String) : [],
+          data: String(log.data),
+          logIndex: String(log.logIndex),
+          transactionHash: String(log.transactionHash),
+          blockNumber: String(log.blockNumber),
+        })),
+      };
+    } finally {
+      if (lockKey) inFlight.delete(lockKey);
     }
-    const receipt = await sender.write(write);
-    return {
-      transaction: receipt.transaction,
-      blockNumber: receipt.blockNumber.toString(),
-      logs: receipt.logs.map((log: any) => ({
-        address: String(log.address),
-        topics: Array.isArray(log.topics) ? log.topics.map(String) : [],
-        data: String(log.data),
-        logIndex: String(log.logIndex),
-        transactionHash: String(log.transactionHash),
-        blockNumber: String(log.blockNumber),
-      })),
-    };
   };
 
   return {
@@ -98,7 +151,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
       switch (action) {
         case "join":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.group,
               abi: groupAbi,
@@ -116,7 +171,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "register":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.registry,
               abi: registryAbi,
@@ -146,7 +203,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "faucetDeposit":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.token,
               abi: tokenAbi,
@@ -164,7 +223,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "issue":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.gate,
               abi: gateAbi,
@@ -182,7 +243,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "transferBudget":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.gate,
               abi: gateAbi,
@@ -218,7 +281,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "revoke":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.revocations,
               abi: revocationsAbi,
@@ -236,7 +301,9 @@ export function createViemWalletRelayClient(options: ViemRelayOptions): WalletRe
           );
         case "registerState":
           return send(
-            options.publicClient.simulateContract({
+            action,
+            args,
+            () => options.publicClient.simulateContract({
               account,
               address: options.deployment.gate,
               abi: gateAbi,

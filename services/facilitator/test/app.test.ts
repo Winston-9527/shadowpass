@@ -201,6 +201,41 @@ describe("facilitator HTTP service", () => {
     expect(denied.headers.get("access-control-allow-origin")).toBeNull();
   });
 
+  it("keeps metrics private and rejects malformed JSON with 400", async () => {
+    const app = createFacilitatorApp({
+      facilitator: {
+        getSupported: () => ({ kinds: [], extensions: [], signers: {} }),
+        verify: async () => ({ isValid: true }),
+        settle: async () => ({ success: true, transaction: "0x05", network: "eip155:84532" }),
+      },
+      relay,
+      metrics: new InMemoryLatencyRecorder(),
+      metricsToken: "metrics-secret",
+    });
+    const server = app.listen(0, "127.0.0.1");
+    servers.push(server);
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("listen failed");
+    const base = `http://127.0.0.1:${address.port}`;
+
+    expect((await fetch(`${base}/metrics`)).status).toBe(404);
+    expect((await fetch(`${base}/metrics`, {
+      headers: { authorization: "Bearer wrong" },
+    })).status).toBe(404);
+    expect((await fetch(`${base}/metrics`, {
+      headers: { authorization: "Bearer metrics-secret" },
+    })).status).toBe(200);
+
+    const malformed = await fetch(`${base}/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{not-json",
+    });
+    expect(malformed.status).toBe(400);
+    await expect(malformed.json()).resolves.toEqual({ error: "invalid_request" });
+  });
+
   it("returns only sanitized relay failure codes", async () => {
     const app = createFacilitatorApp({
       facilitator: {

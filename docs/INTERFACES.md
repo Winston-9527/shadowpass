@@ -255,7 +255,7 @@ Agent 端（#7）实现 `ShadowpassPaymentBuilder.buildPayment`，内部全部�
 4. 用 `ctx.ctxHash`（含 `memoChange`）算出 `ctx_hash`，再用 `witness.actionInput`、`prove.prove`、`prove.verify` 生成证明，本地验证通过后再提交；
 5. 用 `prove.toCalldata` 输出 §8.2 的格式。
 
-MCP 的 x402 客户端只允许 `asset = 部署文件里的测试代币`，并设置单笔上限（`spendControls`）。
+MCP 的 x402 客户端只允许 `asset = 部署文件里的测试代币`，并设置单笔上限（`spendControls`）。`createShadowpassClient` 的 `network` 必须显式传入 `eip155:<deployment.chainId>`，不得使用固定 Base Sepolia 默认值。
 
 ## 9. 信箱 API
 
@@ -363,7 +363,10 @@ POST /relay/:action      body: { "args": { ... } }       -> 200 { "transaction":
 `execute` 的 `args` 与 §8.4 的付款 payload 同形，但 `ct` 固定为 D=2 的 8 个字段，`nowTs` 必须是 uint64；`treasuryWithdraw` 只接受 `{ "positionId": "<uint>" }`。
 
 - 发送前在本地签名账户的串行队列内执行 `eth_call` 模拟；队列内会重新模拟，失败返回 400 和 revert 名称，不广播交易。
+- facilitator 默认只监听 `127.0.0.1`，部署时通过 `FACILITATOR_HOST` 显式覆盖。
 - `execute` 只用于理财存入。`PAY` 必须走 x402 §8.3 的 `/settle`，不得通过 relay 绕过付款请求绑定、按 `budgetNf` 的结算锁和商家限流。
 - 同一时刻，`execute` 按 `budget.budgetNf`、`treasuryWithdraw` 按 `positionId` 只允许一个请求在途；重复请求返回 409 `{ "error": "operation_in_progress" }`。
 - 按 IP 限流；`relay` 默认每分钟 60 次，`faucetDeposit` 的每日次数由 `RELAY_FAUCET_PER_DAY` 配置（默认 1），且只在模拟成功后计入。可信代理头的规则同 §9。
 - 真实入金（§12，从 MetaMask 发出）不经过这里。
+
+`/settle` 每 300 ms 轮询回执。交易已广播但回执查询失败时返回 `transaction_pending` 和交易哈希，并保留 budget nullifier 锁，调用方不能把同一票据当作未付款重试。`/metrics` 默认隐藏；配置 `FACILITATOR_METRICS_TOKEN` 后只接受 Bearer token。

@@ -9,7 +9,7 @@ import {
   type WalletRelayClient,
 } from "@shadowpass/x402";
 import type { InMemoryLatencyRecorder } from "./metrics.js";
-import { RelayRevertError } from "./viem-client.js";
+import { RelayInFlightError, RelayRevertError } from "./viem-client.js";
 
 const relaySchemas = {
   join: z.object({ commitment: uintSchema }).strict(),
@@ -133,6 +133,7 @@ export interface FacilitatorAppOptions {
   relayRateLimit?: Partial<RelayRateLimitConfig>;
   paymentRateLimit?: { perMinute?: number };
   corsOrigins?: string[];
+  metricsToken?: string;
   now?: () => number;
 }
 
@@ -176,7 +177,13 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
 
   app.get("/supported", (_request, response) => response.json(options.facilitator.getSupported()));
   app.get("/health", (_request, response) => response.json({ ok: true }));
-  app.get("/metrics", (_request, response) => response.json({ records: options.metrics.list() }));
+  app.get("/metrics", (request, response) => {
+    if (!options.metricsToken || request.headers.authorization !== `Bearer ${options.metricsToken}`) {
+      response.status(404).json({ error: "not_found" });
+      return;
+    }
+    response.json({ records: options.metrics.list() });
+  });
 
   app.post("/verify", asyncHandler(async (request, response) => {
     if (!paymentLimiter.allow(clientIp(request, trustProxyHeaders))) {
@@ -254,6 +261,10 @@ export function createFacilitatorApp(options: FacilitatorAppOptions) {
       permit.release();
       if (error instanceof RelayRevertError) {
         response.status(400).json({ error: `simulation_failed:${error.revertName}` });
+        return;
+      }
+      if (error instanceof RelayInFlightError) {
+        response.status(409).json({ error: "relay_in_flight" });
         return;
       }
       response.status(502).json({ error: "relay_failed" });
