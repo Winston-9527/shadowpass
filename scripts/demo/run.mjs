@@ -130,7 +130,7 @@ async function listen(app, port, host = "127.0.0.1") {
 }
 
 async function startServices(deployment) {
-  const facilitatorPort = e2e ? 0 : Number(process.env.SHADOWPASS_FACILITATOR_PORT ?? 4022);
+  const facilitatorPort = Number(process.env.SHADOWPASS_FACILITATOR_PORT ?? (e2e ? 0 : 4022));
   const facilitator = await startFacilitator({
     rpcUrl: RPC_URL,
     privateKey: FACILITATOR_PK,
@@ -153,7 +153,7 @@ async function startServices(deployment) {
     merchantPayTo: MERCHANT_PAY_TO,
   });
   await merchant.ready;
-  const merchantPort = e2e ? 0 : Number(process.env.SHADOWPASS_MERCHANT_PORT ?? 4021);
+  const merchantPort = Number(process.env.SHADOWPASS_MERCHANT_PORT ?? (e2e ? 0 : 4021));
   const listener = await listen(merchant.app, merchantPort);
   merchantServer = listener.server;
   return { facilitatorUrl, merchantUrl: listener.url, facilitatorAddress };
@@ -161,7 +161,7 @@ async function startServices(deployment) {
 
 async function startDemo(engine) {
   const app = createDemoApp({ engine, publicDir: defaultPublicDir(import.meta.url) });
-  const port = e2e ? 0 : Number(process.env.SHADOWPASS_DEMO_PORT ?? 4179);
+  const port = Number(process.env.SHADOWPASS_DEMO_PORT ?? (e2e ? 0 : 4179));
   const listener = await listen(app, port);
   demoServer = listener.server;
   return listener.url;
@@ -176,6 +176,12 @@ async function runE2e(url, facilitatorAddress) {
   }
   if (status.anonymity.noteSetSize < 25) throw new Error("note anonymity set is too small");
   if (status.anonymity.identitySetSize !== 1) throw new Error("identity anonymity limitation is not exposed");
+  if (status.anonymity.simulatedAmounts.length !== 20) throw new Error("simulated deposit amounts are missing");
+  for (const amount of status.anonymity.simulatedAmounts) {
+    if (BigInt(amount) < 5_000_000n || BigInt(amount) > 100_000_000n) {
+      throw new Error(`simulated deposit outside 5-100 spUSD: ${amount}`);
+    }
+  }
 
   const purchases = [];
   for (let index = 0; index < 3; index += 1) {
@@ -227,6 +233,7 @@ async function runE2e(url, facilitatorAddress) {
     "划拨理财预算 25 spUSD",
     "理财 Agent 存入白名单金库",
     "到期赎回并生成承诺票据",
+    ...Array.from({ length: 20 }, (_, index) => `模拟用户 #${index + 1} 入金`),
   ];
   for (const label of relayedLabels) {
     const record = finalStatus.transactions.find((entry) => entry.label === label);
@@ -240,6 +247,10 @@ async function runE2e(url, facilitatorAddress) {
   console.log(JSON.stringify({
     result: "ok",
     simulatedDepositors: status.anonymity.simulatedDepositors,
+    simulatedDepositRange: {
+      min: status.anonymity.simulatedAmounts.reduce((left, right) => BigInt(left) < BigInt(right) ? left : right),
+      max: status.anonymity.simulatedAmounts.reduce((left, right) => BigInt(left) > BigInt(right) ? left : right),
+    },
     initialNoteSetSize: status.anonymity.noteSetSize,
     purchases: purchases.map((entry) => ({
       tx: entry.record.tx,

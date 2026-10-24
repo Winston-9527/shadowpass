@@ -52,7 +52,7 @@ bash scripts/demo/run.sh
 2. 编译演示实际使用的 `main_d2`、`main_reg`、`budget_transfer`、`budget_mint`。
 3. 执行 Groth16 setup，并核对产物 manifest。
 4. 启动 Anvil，部署合约。
-5. 创建 20 个独立 EOA，各自入金 1 spUSD。
+5. 创建 20 个独立模拟账户，各自入金 5–100 spUSD；这些入金也统一由 facilitator relay 发送。
 6. 通过 facilitator relay 注册 Alice 根凭证、签发卡、入金和划拨预算，再启动三个本地 HTTP 服务。
 
 终端出现以下内容后，打开 `http://127.0.0.1:4179`：

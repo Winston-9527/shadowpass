@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
+import { PAY_METHOD, TREASURY_METHOD } from "@shadowpass/x402";
 import { createFacilitatorApp } from "../src/app.js";
 import { InMemoryLatencyRecorder } from "../src/metrics.js";
 import { RelayInFlightError, RelayRevertError } from "../src/viem-client.js";
@@ -12,6 +13,25 @@ const relay = {
   },
 };
 const servers: Array<{ close: () => void }> = [];
+
+function executeBody(overrides: Record<string, unknown> = {}) {
+  return {
+    proof: { a: ["1", "2"], b: [["3", "4"], ["5", "6"]], c: ["7", "8"] },
+    roots: { issued: "1", revoked: "2", root: "3" },
+    nowTs: "4",
+    action: {
+      target: "0x0000000000000000000000000000000000000001",
+      method: TREASURY_METHOD,
+      amount: "5",
+      nonce: "6",
+      params: "0x1234",
+    },
+    ct: ["7", "8", "9", "10", "11", "12", "13", "14"],
+    budget: { noteRoot: "9", budgetNf: "10", cmChange: "11", qSpent: "5" },
+    memoChange: "0xabcd",
+    ...overrides,
+  };
+}
 
 afterEach(() => {
   while (servers.length) servers.pop()?.close();
@@ -68,27 +88,13 @@ describe("facilitator HTTP service", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        args: {
-          proof: { a: ["1", "2"], b: [["3", "4"], ["5", "6"]], c: ["7", "8"] },
-          roots: { issued: "1", revoked: "2", root: "3" },
-          nowTs: "4",
-          action: {
-            target: "0x0000000000000000000000000000000000000001",
-            method: "0x12345678",
-            amount: "5",
-            nonce: "6",
-            params: "0x1234",
-          },
-          ct: ["7", "8"],
-          budget: { noteRoot: "9", budgetNf: "10", cmChange: "11", qSpent: "5" },
-          memoChange: "0xabcd",
-        },
+        args: executeBody(),
       }),
     });
     expect(execute.status).toBe(200);
     expect(calls[2]).toEqual(["execute", expect.objectContaining({
       roots: expect.objectContaining({ issued: "1" }),
-      action: expect.objectContaining({ method: "0x12345678" }),
+      action: expect.objectContaining({ method: TREASURY_METHOD }),
     })]);
     const withdraw = await fetch(`${base}/relay/treasuryWithdraw`, {
       method: "POST",
@@ -278,7 +284,7 @@ describe("facilitator HTTP service", () => {
       },
       relay: {
         async relay() {
-          throw new RelayRevertError("FaucetLimit");
+          throw new RelayRevertError("BeforeMaturity");
         },
       },
       metrics: new InMemoryLatencyRecorder(),
@@ -288,13 +294,47 @@ describe("facilitator HTTP service", () => {
     await once(server, "listening");
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("listen failed");
-    const response = await fetch(`http://127.0.0.1:${address.port}/relay/join`, {
+    const response = await fetch(`http://127.0.0.1:${address.port}/relay/treasuryWithdraw`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ args: { commitment: "1" } }),
+      body: JSON.stringify({ args: { positionId: "1" } }),
     });
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "simulation_failed:FaucetLimit" });
+    await expect(response.json()).resolves.toEqual({ error: "simulation_failed:BeforeMaturity" });
+  });
+
+  it("rejects malformed execute fields before simulation", async () => {
+    const app = createFacilitatorApp({
+      facilitator: {
+        getSupported: () => ({ kinds: [], extensions: [], signers: {} }),
+        verify: async () => ({ isValid: true }),
+        settle: async () => ({ success: true, transaction: "0x05", network: "eip155:84532" }),
+      },
+      relay,
+      metrics: new InMemoryLatencyRecorder(),
+    });
+    const server = app.listen(0, "127.0.0.1");
+    servers.push(server);
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("listen failed");
+    const base = `http://127.0.0.1:${address.port}`;
+    const invalid = [
+      executeBody({ action: { ...executeBody().action, target: "0x1" } }),
+      executeBody({ action: { ...executeBody().action, method: PAY_METHOD } }),
+      executeBody({ ct: ["1", "2", "3", "4", "5", "6", "7"] }),
+      executeBody({ nowTs: String(1n << 64n) }),
+    ];
+    for (const args of invalid) {
+      const response = await fetch(`${base}/relay/execute`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ args }),
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "invalid_request" });
+    }
+    expect(calls).toHaveLength(0);
   });
 
   it("returns the shared in-flight error code", async () => {

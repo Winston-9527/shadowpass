@@ -37,7 +37,8 @@ const PAY = 1n;
 const TREASURY = 2n;
 const USDC = 1_000_000n;
 const SIMULATED_USERS = 20;
-const SIMULATED_DEPOSIT = 1n * USDC;
+const SIMULATED_MIN_DEPOSIT = 5n * USDC;
+const SIMULATED_MAX_DEPOSIT = 100n * USDC;
 const MAIN_DEPOSIT = 75n * USDC;
 const BUYER_BUDGET = 40n * USDC;
 const TREASURY_BUDGET = 25n * USDC;
@@ -49,9 +50,6 @@ const groupAbi = parseAbi([
   "function join(uint256 commitment)",
   "function currentRoot() view returns (uint256)",
   "function size() view returns (uint256)",
-]);
-const tokenAbi = parseAbi([
-  `function faucetDeposit(${proof},uint256 cm,uint256 q,bytes memo)`,
 ]);
 const treasuryAbi = parseAbi([
   "function quote(address vault,uint256 amount,uint256 term) view returns (uint256)",
@@ -77,6 +75,11 @@ function randomHex(label) {
 
 function random250() {
   return BigInt(`0x${crypto.randomBytes(32).toString("hex")}`) % (1n << 250n);
+}
+
+function simulatedDeposit(index) {
+  const range = Number(SIMULATED_MAX_DEPOSIT / USDC - SIMULATED_MIN_DEPOSIT / USDC + 1n);
+  return (SIMULATED_MIN_DEPOSIT / USDC + BigInt((index * 17 + 3) % range)) * USDC;
 }
 
 function replayableRandomSource() {
@@ -236,28 +239,22 @@ export class DemoEngine {
       const keys = await deriveKeys(seedFor(`simulated-user-${index}`));
       const privateKey = privateKeyFor(`simulated-user-${index}`);
       const account = privateKeyToAccount(privateKey);
-      const client = createWalletClient({ account, transport: http(this.rpcUrl) });
-      await this.publicClient.request({
-        method: "anvil_setBalance",
-        params: [account.address, "0x56BC75E2D63100000"],
-      });
+      const q = simulatedDeposit(index);
       const note = {
         own: [keys.sign.Ax, keys.sign.Ay],
-        q: SIMULATED_DEPOSIT,
+        q,
         lin: [0n, 0n, 0n, 0n],
         rho: BigInt(`0x${sha256(`simulated-note-${index}`).toString("hex")}`) % (1n << 250n),
       };
       const witness = mintInput(note);
       const result = await this.prove("budget_mint", witness);
       const memo = await encodeNoteMemo(note, keys.box.publicKey);
-      const tx = await this.send({
-        address: this.deployment.token,
-        abi: tokenAbi,
-        functionName: "faucetDeposit",
-        args: [result.proof, noteCm(note), note.q, toHex(memo)],
-        client,
-        label: `模拟用户 #${index + 1} 入金`,
-      });
+      const tx = await this.relay("faucetDeposit", {
+        proof: result.proof,
+        cm: noteCm(note).toString(),
+        q: note.q.toString(),
+        memo: toHex(memo),
+      }, `模拟用户 #${index + 1} 入金`);
       this.simulated.push({
         index: index + 1,
         depositor: account.address,
@@ -762,11 +759,12 @@ export class DemoEngine {
       },
       anonymity: {
         simulatedDepositors: this.simulated.length,
+        simulatedAmounts: this.simulated.map((item) => item.q.toString()),
         simulatedDeposits: this.simulated.reduce((sum, item) => sum + item.q, 0n).toString(),
         noteSetSize: this.state?.notes.size ?? 0,
         registeredIdentities: this.state?.group.size ?? 0,
         identitySetSize: this.state?.group.size ?? 0,
-        note: "20 个模拟用户只扩展票据层匿名集；根凭证身份层匿名集仍为 1。",
+        note: "20 个模拟用户入金 5–100 spUSD 且均由 facilitator 代付；根凭证身份层匿名集仍为 1。",
       },
       story: {
         owner: "Alice",
@@ -888,4 +886,4 @@ export class DemoEngine {
   }
 }
 
-export { SIMULATED_USERS, SIMULATED_DEPOSIT, USDC, TREASURY_METHOD };
+export { SIMULATED_USERS, SIMULATED_MIN_DEPOSIT, SIMULATED_MAX_DEPOSIT, USDC, TREASURY_METHOD };

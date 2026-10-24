@@ -100,7 +100,12 @@ try {
 
   ensure((await text(page.locator("#simulated-count"))).includes("20 个票据层模拟用户"), "simulation label is missing");
   ensure((await text(page.locator("#simulation-copy"))).includes("模拟"), "simulation data is not disclosed");
-  ensure((await text(page.locator("#simulated-deposits"))) === "20 spUSD", "simulated deposits mismatch");
+  const simulated = await page.evaluate(async () => (await fetch("/api/status")).json());
+  ensure(simulated.anonymity.simulatedAmounts.length === 20, "simulated deposit amounts are missing");
+  ensure(simulated.anonymity.simulatedAmounts.every((amount) => (
+    BigInt(amount) >= 5_000_000n && BigInt(amount) <= 100_000_000n
+  )), "simulated deposit amounts are outside 5-100 spUSD");
+  ensure((await text(page.locator("#simulated-deposits"))).endsWith("spUSD"), "simulated deposit total is missing");
   await assertNoHorizontalOverflow(page, "desktop initial view");
   await caption(page, "1 / 5  20 个模拟用户只扩展票据层匿名集；身份层匿名集仍为 1");
   await page.waitForTimeout(3_000);

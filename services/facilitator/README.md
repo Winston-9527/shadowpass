@@ -11,7 +11,7 @@ npm install
 npm run start -w @shadowpass/facilitator
 ```
 
-`SHADOWPASS_NETWORK` selects `deployments/<network>.json`; `PORT`, `ANVIL_RPC_URL`, `BASE_SEPOLIA_RPC`
+`SHADOWPASS_NETWORK` selects `deployments/<network>.json`; `FACILITATOR_HOST`, `PORT`, `ANVIL_RPC_URL`, `BASE_SEPOLIA_RPC`
 and `FACILITATOR_RATE_LIMIT` are read from the environment. `PAYMENT_RATE_LIMIT`, `RELAY_RATE_LIMIT`
 and `RELAY_FAUCET_PER_DAY` control the in-memory IP limits. A failed faucet simulation does not consume the
 daily allowance. `FACILITATOR_CORS_ORIGINS` adds comma-separated origins beyond the wallet production origin
