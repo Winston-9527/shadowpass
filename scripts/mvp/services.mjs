@@ -139,6 +139,31 @@ export function mcpConfiguration(context, name) {
   return { command: process.execPath, args, env };
 }
 
+export function writeRuntimeManifest(context) {
+  const file = path.join(context.runtimeRoot, "claude-config.json");
+  const payload = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    walletUrl: context.walletUrl,
+    rpcUrl: context.rpcUrl,
+    facilitatorUrl: context.facilitatorUrl,
+    mailboxUrl: context.mailboxUrl,
+    merchantUrl: context.merchantUrl,
+    deployment: context.deployment,
+    simulatedDepositors: context.simulated.count,
+    pairings: {
+      buyer: { code: context.pairings.buyer.code, url: `${context.walletUrl}/pair#${context.pairings.buyer.code}` },
+      treasury: { code: context.pairings.treasury.code, url: `${context.walletUrl}/pair#${context.pairings.treasury.code}` },
+    },
+    mcp: {
+      buyer: mcpConfiguration(context, "buyer"),
+      treasury: mcpConfiguration(context, "treasury"),
+    },
+  };
+  fs.writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+  return file;
+}
+
 export function printMcpConfiguration(context) {
   const buyer = mcpConfiguration(context, "buyer");
   const treasury = mcpConfiguration(context, "treasury");

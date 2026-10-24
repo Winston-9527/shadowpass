@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { printMcpConfiguration, startMvp } from "./services.mjs";
+import { printMcpConfiguration, startMvp, writeRuntimeManifest } from "./services.mjs";
 
 const e2e = process.argv.includes("--e2e");
 const context = await startMvp({ e2e });
@@ -30,6 +30,7 @@ try {
       max: context.simulated.amounts.reduce((left, right) => left > right ? left : right).toString(),
     },
   }, null, 2));
+  writeRuntimeManifest(context);
   printMcpConfiguration(context);
 
   if (e2e) {

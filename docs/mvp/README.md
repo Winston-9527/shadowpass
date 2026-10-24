@@ -32,6 +32,19 @@ SHADOWPASS_PTAU=/absolute/path/to/powersOfTau28_hez_final_18.ptau \
 
 端口可用 `MVP_WALLET_PORT`、`MVP_ANVIL_PORT`、`MVP_FACILITATOR_PORT`、`MVP_MAILBOX_PORT`、`MVP_MERCHANT_PORT` 覆盖。
 
+## Claude Skill
+
+仓库内置项目级 Skill：`.claude/skills/shadowpass-mvp/`。重启 Claude Code 后，可以直接说：
+
+```text
+检查并启动 ShadowPass MVP
+跑一遍 ShadowPass MVP 的完整 E2E
+把 buyer 和 treasury 两个 MCP 配到 Claude
+停止 ShadowPass MVP
+```
+
+Skill 会调用 `scripts/mvp` 下的确定性脚本，输出本地配对链接、配对码、MCP 配置、服务状态和 E2E 证据。写入或替换 Claude MCP 配置前会要求确认；真机 Touch ID 录屏不会被自动标记为完成。
+
 ## 本地产物信任
 
 MVP 在自己的 `.runtime/` 中缓存本轮 setup 生成的 WASM、zkey、vk 和 manifest。本地 setup 每次 phase-2 都会产生不同 zkey，因此编排会显式设置：
