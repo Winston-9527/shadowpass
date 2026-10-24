@@ -531,6 +531,10 @@ export class DemoEngine {
       label: "理财 Agent 将 20 spUSD 存入模拟 ERC-4626 金库",
       amount,
       payTo: this.deployment.treasury,
+      target: action.target,
+      method: action.method,
+      budgetNf: built.input.budget_nf.toString(),
+      executor: this.facilitatorAddress,
       tx: tx.hash,
       proofMs: proofResult.proofMs,
       ownerView,
@@ -679,6 +683,10 @@ export class DemoEngine {
       label: "采购 Agent 通过 x402 购买市场报告",
       amount: 2n * USDC,
       payTo: this.merchantPayTo,
+      target: this.deployment.payout,
+      method: PAY_METHOD,
+      budgetNf: this.pendingPurchase.budgetNf.toString(),
+      executor: this.facilitatorAddress,
       tx: settlement?.transaction ?? null,
       proofMs: this.pendingPurchase.proofMs,
       ownerView,
@@ -725,6 +733,29 @@ export class DemoEngine {
       amount: record?.amount ?? (operation === "treasury" ? 20n * USDC : 2n * USDC),
       payTo: record?.payTo ?? (operation === "treasury" ? this.deployment.treasury : undefined),
       proofMs: record?.proofMs,
+      receipt: record ? this.privacyReceipt(record) : null,
+    });
+  }
+
+  privacyReceipt(record) {
+    const ownerCt = record.ownerCt ?? [];
+    return jsonSafe({
+      operation: record.operation,
+      transaction: record.tx ?? null,
+      executor: record.executor ?? null,
+      amount: record.amount,
+      payee: record.payTo ?? null,
+      target: record.target ?? null,
+      method: record.method ?? null,
+      nullifier: record.budgetNf ?? null,
+      proofMs: record.proofMs ?? null,
+      ownerView: record.ownerView ?? [],
+      ciphertext: {
+        segments: ownerCt.length,
+        preview: ownerCt.length
+          ? `${String(ownerCt[0]).slice(0, 12)}…${String(ownerCt.at(-1)).slice(-8)}`
+          : null,
+      },
     });
   }
 

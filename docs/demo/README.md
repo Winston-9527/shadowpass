@@ -5,6 +5,7 @@
 - 采购 Agent 通过 x402 向示例商家购买市场报告，由 facilitator 代付并调用 `ShadowGate.execute`。
 - 理财 Agent 用 `TREASURY_SUPPLY` 将预算存入白名单 ERC-4626 金库，到期后赎回，并把本金和收益生成到预先承诺的票据。
 - Alice 用自己的查看钥解密两条分支的委托链，证明 Agent 的每笔操作都能被主人对账。
+- 交易隐私剖面并排展示公开链回执和 Alice 回执，用票据层点阵、身份层匿名集和真实 nullifier 说明当前匿名边界。
 - 页面右侧的对照面板解释同样的操作如果走 ERC-7710、Smart Account 或 session key，链上通常能看到什么。
 
 当前交付是**协议层演示**：使用 SDK、合约和 facilitator 串起真实链路，不包含钱包 PWA passkey 或 MCP/Claude 操作。完整钱包加 MCP 的讲解版会等 #44、#47、#48 合并后另开 PR。
@@ -103,7 +104,7 @@ DEMO_URL=http://127.0.0.1:4179 \
 node scripts/demo/ui-check.mjs
 ```
 
-脚本会真实点击采购、理财、赎回，验证链上事件解密主人视图和对照面板，并检查 1440、390、320 px 视口没有横向溢出。截图默认写入 `scripts/demo/.runtime/ui/`。如需重新生成协议层复核录屏：
+脚本会真实点击采购、理财、赎回，验证链上事件解密主人视图和对照面板，并检查 1440、390、320 px 视口没有横向溢出。它还会验证隐私剖面中的真实交易哈希、facilitator 执行账户、budget nullifier、密文字段、Alice 解密链和匿名集限制。截图默认写入 `scripts/demo/.runtime/ui/`。如需重新生成协议层复核录屏：
 
 ```bash
 DEMO_URL=http://127.0.0.1:4179 \
