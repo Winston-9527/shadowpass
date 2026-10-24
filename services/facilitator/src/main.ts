@@ -1,4 +1,5 @@
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { Server } from "node:http";
 import { x402Facilitator } from "@x402/core/facilitator";
 import { ShadowpassFacilitatorScheme } from "@shadowpass/x402";
@@ -20,6 +21,7 @@ export interface FacilitatorConfig {
     trustProxyHeaders?: boolean;
   };
   paymentRateLimit?: { perMinute?: number };
+  corsOrigins?: string[];
 }
 
 export async function startFacilitator(config: FacilitatorConfig): Promise<{
@@ -56,6 +58,7 @@ export async function startFacilitator(config: FacilitatorConfig): Promise<{
     paymentRateLimit: {
       perMinute: config.paymentRateLimit?.perMinute,
     },
+    corsOrigins: config.corsOrigins,
   });
   const server = await new Promise<Server>((resolve) => {
     const listening = app.listen(config.port ?? 4022, () => resolve(listening));
@@ -75,6 +78,11 @@ export async function main(): Promise<void> {
   const rpcUrl = network === "anvil"
     ? process.env.ANVIL_RPC_URL ?? "http://127.0.0.1:8545"
     : required("BASE_SEPOLIA_RPC");
+  const relayFaucetPerDay = Number(process.env.RELAY_FAUCET_PER_DAY ?? 1);
+  const corsOrigins = (process.env.FACILITATOR_CORS_ORIGINS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
   const { server } = await startFacilitator({
     rpcUrl,
     privateKey: required("FACILITATOR_PK") as Hex,
@@ -86,21 +94,33 @@ export async function main(): Promise<void> {
     },
     relayRateLimit: {
       perMinute: Number(process.env.RELAY_RATE_LIMIT ?? 60),
-      faucetPerDay: Number(process.env.RELAY_FAUCET_PER_DAY ?? 1),
+      faucetPerDay: relayFaucetPerDay,
       trustProxyHeaders: process.env.VERCEL === "1" || process.env.TRUST_PROXY_HEADERS === "1",
     },
     paymentRateLimit: {
       perMinute: Number(process.env.PAYMENT_RATE_LIMIT ?? 120),
     },
+    corsOrigins,
   });
   console.log(JSON.stringify({
     type: "shadowpass.facilitator.started",
     network,
     port: (server.address() as any)?.port,
+    relayFaucetPerDay,
+    corsOrigins: corsOrigins.length ? corsOrigins : undefined,
   }));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isMainModule(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   main().catch((error) => {
     console.error(error);
     process.exitCode = 1;

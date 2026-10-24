@@ -125,6 +125,82 @@ describe("facilitator HTTP service", () => {
     expect((await fetch(`${base}/relay/faucetDeposit`, { method: "POST", headers, body })).status).toBe(429);
   });
 
+  it("does not consume the daily faucet quota when simulation fails", async () => {
+    let attempts = 0;
+    const retryingRelay = {
+      async relay(action: string, args: unknown) {
+        attempts += 1;
+        if (attempts === 1) throw new RelayRevertError("InvalidProof");
+        return relay.relay(action, args);
+      },
+    };
+    const app = createFacilitatorApp({
+      facilitator: {
+        getSupported: () => ({ kinds: [], extensions: [], signers: {} }),
+        verify: async () => ({ isValid: true }),
+        settle: async () => ({ success: true, transaction: "0x05", network: "eip155:84532" }),
+      },
+      relay: retryingRelay,
+      metrics: new InMemoryLatencyRecorder(),
+      relayRateLimit: { perMinute: 10, faucetPerDay: 1, trustProxyHeaders: true },
+    });
+    const server = app.listen(0, "127.0.0.1");
+    servers.push(server);
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("listen failed");
+    const base = `http://127.0.0.1:${address.port}`;
+    const headers = { "content-type": "application/json", "x-real-ip": "203.0.113.10" };
+    const body = JSON.stringify({
+      args: {
+        proof: { a: ["1", "2"], b: [["3", "4"], ["5", "6"]], c: ["7", "8"] },
+        cm: "1", q: "2", memo: "0x1234",
+      },
+    });
+
+    expect((await fetch(`${base}/relay/faucetDeposit`, { method: "POST", headers, body })).status).toBe(400);
+    expect((await fetch(`${base}/relay/faucetDeposit`, { method: "POST", headers, body })).status).toBe(200);
+    expect((await fetch(`${base}/relay/faucetDeposit`, { method: "POST", headers, body })).status).toBe(429);
+  });
+
+  it("allows wallet origins and answers CORS preflight", async () => {
+    const app = createFacilitatorApp({
+      facilitator: {
+        getSupported: () => ({ kinds: [], extensions: [], signers: {} }),
+        verify: async () => ({ isValid: true }),
+        settle: async () => ({ success: true, transaction: "0x05", network: "eip155:84532" }),
+      },
+      relay,
+      metrics: new InMemoryLatencyRecorder(),
+    });
+    const server = app.listen(0, "127.0.0.1");
+    servers.push(server);
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("listen failed");
+    const base = `http://127.0.0.1:${address.port}`;
+
+    for (const origin of ["https://shadowpass-wallet.vercel.app", "http://localhost:5173"]) {
+      const response = await fetch(`${base}/health`, { headers: { origin } });
+      expect(response.headers.get("access-control-allow-origin")).toBe(origin);
+    }
+
+    const preflight = await fetch(`${base}/relay/faucetDeposit`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://127.0.0.1:5173",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:5173");
+    expect(preflight.headers.get("access-control-allow-methods")).toContain("POST");
+
+    const denied = await fetch(`${base}/health`, { headers: { origin: "https://evil.example" } });
+    expect(denied.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
   it("returns only sanitized relay failure codes", async () => {
     const app = createFacilitatorApp({
       facilitator: {

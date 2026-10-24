@@ -66,6 +66,16 @@ Vercel 项目 Root Directory 设为 `apps/wallet`，仓库内 `vercel.json` 会�
 VITE_MAILBOX_URL=http://localhost:8787
 ```
 
+设置 facilitator 与证明产物来源：
+
+```bash
+VITE_FACILITATOR_URL=http://127.0.0.1:4022
+VITE_SHADOWPASS_ARTIFACTS=https://shadowpass-wallet.vercel.app/zk/circuits-v2
+```
+
+生产环境的 facilitator 地址通过 Vercel 项目环境变量配置；同源代理时也可设为 `/facilitator` 并使用
+`vercel.json` rewrite。证明产物托管方式见 `docs/DEPLOY.md` §4。
+
 生产环境必须配置 `VITE_MAILBOX_URL`。未配置时页面会阻断开通，不使用内存槽冒充可恢复钱包。
 
 ## 开通、充值与发卡

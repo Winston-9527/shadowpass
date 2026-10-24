@@ -356,10 +356,11 @@ contract ApplicationsTest is Test {
 
     function test_faucet_daily_limit_resets() public {
         address user = address(0xA11CE);
-        vm.prank(user);
-        token.faucetAmount(70 * 10 ** 6);
-        vm.prank(user);
-        token.faucetAmount(30 * 10 ** 6);
+        uint256 cap = ShadowToken(token).MAX_FAUCET_AMOUNT();
+        for (uint256 i = 0; i < 100; i++) {
+            vm.prank(user);
+            token.faucetAmount(cap);
+        }
         assertEq(token.remainingFaucet(), 0);
 
         vm.prank(user);
@@ -368,15 +369,18 @@ contract ApplicationsTest is Test {
 
         vm.warp(block.timestamp + DAY);
         vm.prank(user);
-        token.faucetAmount(1 * 10 ** 6);
-        assertEq(token.remainingFaucet(), 99 * 10 ** 6);
+        token.faucetAmount(100 * 10 ** 6);
+        assertEq(token.remainingFaucet(), 9_900 * 10 ** 6);
     }
 
     function test_faucet_limit_is_global() public {
-        vm.prank(address(0xA11CE));
-        token.faucetAmount(70 * 10 ** 6);
+        uint256 cap = ShadowToken(token).MAX_FAUCET_AMOUNT();
+        for (uint256 i = 0; i < 99; i++) {
+            vm.prank(address(0xA11CE));
+            token.faucetAmount(cap);
+        }
         vm.prank(address(0xB0B));
-        token.faucetAmount(30 * 10 ** 6);
+        token.faucetAmount(cap);
         assertEq(token.remainingFaucet(), 0);
 
         vm.prank(address(0xA11CE));
@@ -384,11 +388,11 @@ contract ApplicationsTest is Test {
         token.faucetAmount(1);
     }
 
-    function test_faucet_deposit_passes_exact_memo_and_limit() public {
+    function test_faucet_deposit_passes_exact_memo_and_cap() public {
         address user = address(0xA11CE);
         IShadowGate.Proof memory proof;
         uint256 cm = 0xCAFE;
-        uint256 q = ShadowToken(token).DAILY_FAUCET_LIMIT();
+        uint256 q = ShadowToken(token).MAX_FAUCET_AMOUNT();
         bytes memory memo = hex"deadbeef";
 
         vm.prank(user);
@@ -399,16 +403,24 @@ contract ApplicationsTest is Test {
         assertEq(gate.lastDepositQ(), q);
         assertEq(gate.lastDepositMemo(), memo);
         assertEq(token.allowance(address(token), address(gate)), 0);
-        assertEq(token.remainingFaucet(), 0);
+        assertEq(token.remainingFaucet(), 9_900 * 10 ** 6);
 
         vm.prank(user);
-        vm.expectRevert(ShadowToken.FaucetLimit.selector);
         token.faucetDeposit(proof, cm + 1, 1, memo);
-
-        vm.warp(block.timestamp + DAY);
-        vm.prank(user);
-        token.faucetDeposit(proof, cm + 2, 1, memo);
         assertEq(gate.deposits(), 2);
+        assertEq(token.remainingFaucet(), ShadowToken(token).DAILY_FAUCET_LIMIT() - q - 1);
+    }
+
+    function test_faucet_rejects_single_amount_above_cap() public {
+        uint256 cap = ShadowToken(token).MAX_FAUCET_AMOUNT();
+        vm.prank(address(0xA11CE));
+        vm.expectRevert(ShadowToken.FaucetAmountTooHigh.selector);
+        token.faucetAmount(cap + 1);
+
+        IShadowGate.Proof memory proof;
+        vm.prank(address(0xA11CE));
+        vm.expectRevert(ShadowToken.FaucetAmountTooHigh.selector);
+        token.faucetDeposit(proof, 1, cap + 1, hex"");
     }
 
     function _supply(uint256 amount, uint256 expectedQ, uint256 returnCm, bytes memory returnMemo)

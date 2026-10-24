@@ -59,7 +59,17 @@ Vercel 项目里 Git 评论（PR 上的部署链接）也已关闭。剩下的�
 
 ## 3. 环境变量
 
-静态占位页不需要环境变量。后续接入链上交互时再加，清单见 `.env.example`；其中 `SHADOWPASS_ARTIFACTS` 默认指向本域名的 `/zk/circuits-v<N>/`。
+钱包构建使用以下公开变量，完整清单见 `.env.example`：
+
+| 变量 | 例子 | 用途 |
+|---|---|---|
+| `VITE_MAILBOX_URL` | `https://shadowpass-mailbox.vercel.app` | 加密信箱和备份槽 |
+| `VITE_FACILITATOR_URL` | `https://shadowpass-facilitator.vercel.app` | 钱包调用 facilitator relay |
+| `VITE_SHADOWPASS_ARTIFACTS` | `https://artifacts.example.com/zk/circuits-v2` | 浏览器加载证明产物 |
+
+如果 facilitator 使用同源代理，可把 `VITE_FACILITATOR_URL` 设为 `/facilitator`，并在钱包的 Vercel
+项目配置 rewrite 到真实服务。facilitator 默认允许 `https://shadowpass-wallet.vercel.app`、
+`http://localhost:*` 和 `http://127.0.0.1:*`；其他域名通过 `FACILITATOR_CORS_ORIGINS` 添加。
 
 注意：只有 `VITE_` 前缀的变量会进浏览器包，密钥类变量（`DEPLOYER_PK`、`FACILITATOR_PK`）**绝不能**加 `VITE_`。
 
@@ -67,10 +77,13 @@ Vercel 项目里 Git 评论（PR 上的部署链接）也已关闭。剩下的�
 
 `circuits/scripts/publish-artifacts.sh` 把 wasm、zkey、vk 复制到 `apps/wallet/public/zk/circuits-v<N>/`（该目录 git-ignored，不进仓库）。
 
-要在线托管时，必须在**部署前**生成产物，让它们出现在构建产物里。CI 里没有 circom 和 ptau，所以要么：
+要在线托管时，必须在**部署前**生成产物，让它们出现在构建产物里。CI 里没有 circom 和 ptau，所以有两种方式：
 
 - 本地 `cd circuits && bash scripts/build.sh && npm run setup && bash scripts/publish-artifacts.sh` 后再部署；或
-- 把产物放到外部存储 / OSS，改 `SHADOWPASS_ARTIFACTS` 指向它。
+- **外部托管（推荐给 Vercel）**：把 `apps/wallet/public/zk/circuits-v2/` 整体上传到不可变版本的 OSS、
+  GitHub Release 或对象存储，URL 路径保持 `/zk/circuits-v2/` 下的 `*.wasm`、`*.zkey`、`vk_*.json` 和
+  `MANIFEST.sha256` 相对布局。服务端和 MCP 设置 `SHADOWPASS_ARTIFACTS`，钱包构建设置
+  `VITE_SHADOWPASS_ARTIFACTS` 指向同一个根 URL。Vercel 构建只托管前端，不现场下载 PTAU 或运行 setup。
 
 产物由 SDK 内置的哈希表校验（`packages/sdk/scripts/generate-artifact-hashes.mjs` 从 `circuits/zk/MANIFEST.sha256` 生成），不依赖托管方自报的 MANIFEST。
 
