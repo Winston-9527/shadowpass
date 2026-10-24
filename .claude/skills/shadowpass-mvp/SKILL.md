@@ -138,7 +138,12 @@ For an interactive run, inspect:
 ```bash
 node .claude/skills/shadowpass-mvp/scripts/mvp.mjs status
 node .claude/skills/shadowpass-mvp/scripts/mvp.mjs pairs
+npm run explorer:mvp -- --watch
 ```
+
+The explorer shows Agent limits, real `Executed` transactions, executor accounts,
+budget nullifiers, owner ciphertexts and the current ticket/identity anonymity
+sets. Use `--agent buyer`, `--last 20`, or `--json` for a focused demonstration.
 
 Real Touch ID recording remains a human acceptance item. The automated E2E uses a Playwright passkey double and cannot satisfy that item.
 
