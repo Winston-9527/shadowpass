@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { WalletBill } from "./bill";
-import { DEFAULT_ALERT_RULES, UNREPORTED_GRACE_MS, evaluateBillAlerts, freshAlerts, normalizeAlertRules } from "./alert-rules";
+import {
+  DEFAULT_ALERT_RULES,
+  UNREPORTED_GRACE_MS,
+  evaluateBillAlerts,
+  freshAlerts,
+  mergeActiveAlerts,
+  newlyDisplayedAlerts,
+  normalizeAlertRules,
+} from "./alert-rules";
 
 function bill(overrides: Partial<WalletBill> & Pick<WalletBill, "budgetNf">): WalletBill {
   return {
@@ -56,5 +64,17 @@ describe("bill alert rules", () => {
     });
     const first = evaluateBillAlerts([bill({ budgetNf: 1n, reported: false })], DEFAULT_ALERT_RULES);
     expect(freshAlerts(new Set([first[0]!.id]), first)).toEqual([]);
+  });
+
+  it("does not record an alert as delivered before it is displayed", () => {
+    const now = 1_700_001_000_000;
+    const alerts = evaluateBillAlerts([
+      bill({ budgetNf: 44n, reported: false, chainTimeMs: now - UNREPORTED_GRACE_MS }),
+    ], DEFAULT_ALERT_RULES, now);
+    const seen = new Set<string>();
+    const active = mergeActiveAlerts([], alerts, seen);
+    expect(active).toHaveLength(1);
+    expect(seen.size).toBe(0);
+    expect(newlyDisplayedAlerts(active, seen).map((alert) => alert.id)).toEqual([alerts[0]!.id]);
   });
 });

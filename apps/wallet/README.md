@@ -82,7 +82,7 @@ VITE_MAILBOX_URL=http://localhost:8787
 ## 账单、异常提醒与吊销
 
 - 钱包只从链上 `OwnerCiphertext` 解出交易链，并匹配授权树中的任意 Agent 公钥；经签名校验且能追溯到父卡的 `delegated` 消息用于识别子 Agent。无法解密的陌生交易不会进入账单列表或计数。信箱 `receipt` 是未经认证的展示数据：`budgetNf`、交易哈希和金额必须同时匹配链上事件，才标记为“已上报”，链上状态始终是权威来源。
-- 未上报提醒有 30 秒宽限期，避免诚实的 Agent 在交易确认与收据到达之间被误报；匹配收据到达后会撤销当前提醒。已提醒 ID 保存在本地 IndexedDB，刷新页面不会重复提醒历史记录。
+- 未上报提醒有 30 秒宽限期，避免诚实的 Agent 在交易确认与收据到达之间被误报；匹配收据到达后会撤销当前提醒。链上“当前时间”取最新区块时间戳，付款时页面关闭也会在下次打开并解锁后按链上时间补报；只有已经渲染到页面的提醒才会写入本地 IndexedDB，刷新页面不会重复提醒历史记录。
 - 账单页的异常规则保存在本地 IndexedDB，默认启用未上报、5 分钟超过 5 笔、单笔超过 20 USDC。页面每 7 秒增量拉取新块和信箱游标，并在标签页重新可见时立刻刷新；阈值按链上区块时间计算，避免本机与链上时钟偏移。
 - 命中规则后页面展示全部当前提醒、发出提示音并闪烁标题栏；无用户手势时浏览器可能阻止声音，标题栏提醒仍会工作。
 - 管家可以吊销任一 Agent 的 cert1；Alice 可以用签名钥和 `own_w` 吊销 cert0 整棵树。两种操作都调用 SDK `revokeCertInput` 生成 `main_revoke` 证明，再通过 facilitator 的 `revoke` relay 提交。
@@ -124,7 +124,7 @@ npm run e2e:browser-chain -w @shadowpass/wallet
 
 `e2e:chain` 直接调用钱包 flows，覆盖开通、100 入金、PAY 40、TREASURY 50、信箱凭证同步、`wallet_status` 和逐卡主人记录恢复。它随后用真实 `main_d2` 证明直接向 Anvil `ShadowGate.execute` 写一笔不上报的付款，验证账单归属和错误查看钥；再执行 Agent 吊销、整树吊销和 `TREASURY_SUPPLY`，并在宽限窗口后确认旧 `revoked` 根得到 `StaleRevokedRoot`。这里的直接 Gate 调用是故意不经过 MCP `pay` 的恶意 Agent 模拟，不等于完整 x402 交付链路。
 
-`e2e:browser-chain` 在 Chrome、生产构建和 Vite preview 中重复开通与发卡，然后从 Node 侧提交同一笔真实 Gate 付款，检查页面在 30 秒内出现“未上报”警戒栏和标题栏闪烁，再通过 UI 生成吊销证明并显示 10 秒宽限窗口。两者使用 PRF 替身，不替代真实 Touch ID 的录屏验收；自动化也不能证明提示音一定播放，声音在浏览器自动播放策略下可能被阻止。
+`e2e:browser-chain` 在 Chrome、生产构建和 Vite preview 中用两个标签页完成开通与发卡，然后关闭钱包页面，从 Node 侧提交真实 Gate 付款并推进区块时间；重新打开并解锁钱包后检查“未上报”警戒栏和标题栏闪烁，再通过 UI 生成吊销证明并显示 10 秒宽限窗口。两者使用 PRF 替身，不替代真实 Touch ID 的录屏验收；自动化也不能证明提示音一定播放，声音在浏览器自动播放策略下可能被阻止。
 
 真实 Touch ID 仍需人工验收：
 

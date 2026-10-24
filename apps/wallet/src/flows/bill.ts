@@ -41,6 +41,7 @@ export interface BillSnapshot {
   receipts: ChainReceipt[];
   delegations: ChainDelegation[];
   mailboxCursor: number;
+  latestBlockTimeMs: number;
 }
 
 function mailboxMessage(value: unknown): MailboxMessage | null {
@@ -171,14 +172,18 @@ export async function loadBillSnapshot(options: {
   const receipts = [...(options.receipts ?? []), ...receiptsFromMailbox(mailboxEntries)];
   const delegations = [...(options.delegations ?? []), ...delegationsFromMailbox(mailboxEntries)];
   const entries = scanBill(sync.state, sync.logs, options.bundle.view.vsk);
-  const blockNumbers = entries.flatMap((entry) => entry.blockNumber === undefined ? [] : [entry.blockNumber]);
-  const blockTimes = blockNumbers.length === 0 ? new Map<string, number>() : await options.gateway.blockTimestamps(blockNumbers);
+  const blockNumbers = [...new Set([
+    sync.state.lastBlock,
+    ...entries.flatMap((entry) => entry.blockNumber === undefined ? [] : [entry.blockNumber]),
+  ].map(String))].map(BigInt);
+  const blockTimes = await options.gateway.blockTimestamps(blockNumbers);
   return {
     state: sync.state,
     logs: sync.logs,
     receipts,
     delegations,
     mailboxCursor: mailboxEntries.reduce((cursor, entry) => Math.max(cursor, entry.id), options.mailboxCursor ?? 0),
+    latestBlockTimeMs: blockTimes.get(sync.state.lastBlock.toString()) ?? 0,
     bills: mergeWalletBills({ entries, ledger: options.ledger, receipts, delegations, blockTimes }),
   };
 }

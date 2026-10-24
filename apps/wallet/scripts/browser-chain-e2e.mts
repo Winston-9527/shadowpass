@@ -141,7 +141,7 @@ try {
   try {
     const context = await chrome.newContext({ viewport: { width: 1440, height: 1000 } });
     await context.addInitScript({ path: path.join(here, "install-passkey-double.js") });
-    const page = await context.newPage();
+    let page = await context.newPage();
     await page.goto(url);
     assert.equal(await page.evaluate(async () => {
       const credential = await navigator.credentials.create({ publicKey: { challenge: new Uint8Array([1]).buffer } });
@@ -184,7 +184,7 @@ try {
     const depositMs = Date.now() - depositStarted;
     await page.screenshot({ path: path.join(outputDir, "wallet-funded-100.png"), fullPage: true });
 
-    const secondPage = await context.newPage();
+    let secondPage = await context.newPage();
     await secondPage.goto(url);
     await secondPage.locator(".passkey-row").first().click();
     await secondPage.locator(".owner-console").waitFor({ timeout: 30_000 });
@@ -270,7 +270,15 @@ try {
     });
     await registerActionState(gateway, malicious);
     const alertStarted = Date.now();
+    await page.close();
+    await secondPage.close();
     const maliciousTx = await submitAction(client, rpcUrl, deployment, malicious);
+    await client.request({ method: "evm_increaseTime", params: [31] } as any);
+    await client.request({ method: "evm_mine", params: [] } as any);
+    page = await context.newPage();
+    await page.goto(url);
+    await page.locator(".passkey-row").first().click();
+    await page.locator(".owner-console").waitFor({ timeout: 30_000 });
     await page.getByTestId("bill-alert").waitFor({ timeout: 45_000 });
     const alertText = await page.getByTestId("bill-alert").textContent();
     assert.match(alertText ?? "", /Unreported spend/);
@@ -296,6 +304,7 @@ try {
       cardTimings: ledger.cards.map((card) => card.timings),
       authorizationTree: { cards: 2, stewardRemaining: "10000000" },
       crossTabIssuance: { pages: 2, cards: ledger.cards.length },
+      alertAfterReopen: true,
       mcp: [{ name: buyerStore.name, ...buyerStatus }, { name: treasuryStore.name, ...treasuryStatus }],
       transactions: { maliciousPayment: maliciousTx },
       screenshots: ["wallet-funded-100.png", "wallet-authorization-tree.png", "wallet-unreported-bill.png", "wallet-revoked-grace.png"],

@@ -117,7 +117,7 @@ describe("wallet bill reconciliation", () => {
       : [{ id: 7, ct: "x", decoded: true, value: secondReceipt }]) as MailboxEntry<T>[]);
     const gateway = {
       poll: async () => ({ state: new ChainState(), logs: [] }),
-      blockTimestamps: async () => new Map(),
+      blockTimestamps: async (blocks: readonly bigint[]) => new Map(blocks.map((block) => [block.toString(), 1_700_000_000_000])),
     } as unknown as WalletGateway;
     const options = { ledger, gateway, mailbox: { pollAll } as unknown as MailboxReader, bundle: { view: { vsk: owner.view.vsk }, box: {} } };
 
@@ -125,6 +125,7 @@ describe("wallet bill reconciliation", () => {
     const second = await loadBillSnapshot({ ...options, mailboxCursor: first.mailboxCursor, receipts: first.receipts });
     expect(pollAll.mock.calls.map((call) => call[1])).toEqual([0, 3]);
     expect(first.mailboxCursor).toBe(3);
+    expect(first.latestBlockTimeMs).toBe(1_700_000_000_000);
     expect(second.mailboxCursor).toBe(7);
     expect(second.receipts.map((receipt) => receipt.budgetNf)).toEqual(["1", "2"]);
   });

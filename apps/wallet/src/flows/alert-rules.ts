@@ -128,3 +128,21 @@ export function evaluateBillAlerts(
 export function freshAlerts(seen: ReadonlySet<string>, alerts: readonly BillAlert[]): BillAlert[] {
   return alerts.filter((alert) => !seen.has(alert.id));
 }
+
+export function mergeActiveAlerts(
+  active: readonly BillAlert[],
+  alerts: readonly BillAlert[],
+  seen: ReadonlySet<string>,
+): BillAlert[] {
+  const currentIds = new Set(alerts.map((alert) => alert.id));
+  const retained = active.filter((alert) => currentIds.has(alert.id));
+  const displayedIds = new Set(retained.map((alert) => alert.id));
+  return [
+    ...retained,
+    ...freshAlerts(seen, alerts.filter((alert) => !displayedIds.has(alert.id))),
+  ];
+}
+
+export function newlyDisplayedAlerts(active: readonly BillAlert[], seen: ReadonlySet<string>): BillAlert[] {
+  return active.filter((alert) => !seen.has(alert.id));
+}

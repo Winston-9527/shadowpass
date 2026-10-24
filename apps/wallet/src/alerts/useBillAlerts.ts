@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { BillAlert } from "../flows/alert-rules";
-import { freshAlerts } from "../flows/alert-rules";
+import { mergeActiveAlerts, newlyDisplayedAlerts } from "../flows/alert-rules";
 import { getWalletState, saveWalletState } from "../keystore/db";
 
 type AudioContextConstructor = new () => AudioContext;
@@ -61,18 +61,20 @@ export function useBillAlerts(alerts: readonly BillAlert[], storageKey?: string)
   }, [storageKey]);
 
   useEffect(() => {
-    const currentIds = new Set(alerts.map((alert) => alert.id));
-    setActive((previous) => previous.filter((alert) => currentIds.has(alert.id)));
     if (!hydrated) return;
-    const fresh = freshAlerts(seen.current, alerts);
-    if (fresh.length === 0) return;
-    for (const alert of fresh) seen.current.add(alert.id);
-    setActive(fresh);
+    setActive((previous) => mergeActiveAlerts(previous, alerts, seen.current));
+  }, [alerts, hydrated, storageKey]);
+
+  useEffect(() => {
+    if (!hydrated || active.length === 0) return;
+    const newlyDisplayed = newlyDisplayedAlerts(active, seen.current);
+    if (newlyDisplayed.length === 0) return;
+    for (const alert of newlyDisplayed) seen.current.add(alert.id);
     if (storageKey) {
       void saveWalletState(storageKey, { ids: [...seen.current].slice(-500) }).catch(() => undefined);
     }
     void playAlertTone().catch(() => undefined);
-  }, [alerts, hydrated, storageKey]);
+  }, [active, hydrated, storageKey]);
 
   useEffect(() => {
     if (!flashKey || typeof document === "undefined") return;

@@ -94,10 +94,6 @@ function pendingPairing(pending: PendingBudgetTransfer): PairingPayload {
   };
 }
 
-function latestChainTime(bills: readonly WalletBill[]): number {
-  return bills.reduce((latest, bill) => Math.max(latest, bill.chainTimeMs), 0);
-}
-
 export function OwnerConsole({ session, config, gateway: injectedGateway, proofs: injectedProofs, mailer: injectedMailer }: OwnerConsoleProps) {
   const [tab, setTab] = useState<Tab>("wallet");
   const [ledger, setLedger] = useState<WalletLedger | null>(null);
@@ -112,7 +108,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [chainRevision, setChainRevision] = useState(0);
-  const [chainClock, setChainClock] = useState({ chainTimeMs: 0, observedAtMs: Date.now() });
+  const [latestBlockTimeMs, setLatestBlockTimeMs] = useState(0);
   const [pairInput, setPairInput] = useState(initialPairInput);
   const [pairing, setPairing] = useState<PairingPayload | null>(() => {
     if (!initialPairInput) return null;
@@ -133,12 +129,9 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
   const gateway = useMemo(() => injectedGateway ?? new BrowserWalletGateway(config), [config, injectedGateway]);
   const proofs = useMemo(() => injectedProofs ?? new SnarkProofService(config.artifactsUrl), [config.artifactsUrl, injectedProofs]);
   const mailer = useMemo(() => injectedMailer ?? new MailboxClient(config.mailboxUrl), [config.mailboxUrl, injectedMailer]);
-  const alertNowMs = chainClock.chainTimeMs === 0
-    ? Date.now()
-    : chainClock.chainTimeMs + (Date.now() - chainClock.observedAtMs);
   const alerts = useMemo(
-    () => evaluateBillAlerts(bills, alertRules, alertNowMs),
-    [alertNowMs, alertRules, bills],
+    () => latestBlockTimeMs === 0 ? [] : evaluateBillAlerts(bills, alertRules, latestBlockTimeMs),
+    [alertRules, bills, latestBlockTimeMs],
   );
   const alertHistoryStorageKey = `${alertRulesKey(config.deployment.chainId, config.network, session.bundle.sign.Ax)}:delivered`;
   const pageAlerts = useBillAlerts(alerts, alertHistoryStorageKey);
@@ -176,6 +169,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     receiptsRef.current = snapshot.receipts;
     delegationsRef.current = snapshot.delegations;
     setChainState(snapshot.state);
+    setLatestBlockTimeMs(snapshot.latestBlockTimeMs);
     setBills(snapshot.bills);
     setChainRevision((revision) => revision + 1);
     setPollError(null);
@@ -220,6 +214,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
         receiptsRef.current = billSnapshot.receipts;
         delegationsRef.current = billSnapshot.delegations;
         setChainState(billSnapshot.state);
+        setLatestBlockTimeMs(billSnapshot.latestBlockTimeMs);
         setBills(billSnapshot.bills);
         setChainRevision((revision) => revision + 1);
         const rules = await getWalletState<AlertRules>(alertRulesKey(config.deployment.chainId, config.network, session.bundle.sign.Ax));
@@ -263,14 +258,6 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [Boolean(ledger), refresh]);
-
-  useEffect(() => {
-    const latest = latestChainTime(bills);
-    if (latest === 0) return;
-    setChainClock((current) => current.chainTimeMs === latest
-      ? current
-      : { chainTimeMs: latest, observedAtMs: Date.now() });
-  }, [bills]);
 
   const run = async (kind: Exclude<Busy, null>, action: () => Promise<void>) => {
     busyRef.current = true;
@@ -372,26 +359,33 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
 
   const handleIssue = () => run("issue", async () => {
     if (!ledger) throw new Error("wallet ledger is not ready");
-    const parsed = pairing ?? parsePairingCode(pairInput);
-    const budget = parseAmount(budgetInput);
-    const days = Number(expiryDays);
-    if (!Number.isSafeInteger(days) || days < 1 || days > 30) throw new Error("expiry must be between 1 and 30 days");
     let deliveryError: string | undefined;
     let publishError: string | undefined;
     await withCrossTabLock(walletLockName, async () => {
       const current = await loadFreshLedger();
       const now = BigInt(Math.floor(Date.now() / 1000));
       if (!current.root) throw new Error("onboard the wallet before issuing a card");
-      if (now + BigInt(days) * 86_400n > BigInt(current.root.expiry)) {
-        throw new Error("expiry exceeds the root certificate's remaining lifetime");
-      }
+      const pending = current.pendingTransfer;
+      const request = pending
+        ? {
+            pairing: pendingPairing(pending),
+            capability: BigInt(pending.card.cap),
+            budget: BigInt(pending.card.budget),
+            expiry: BigInt(pending.card.expiry),
+          }
+        : (() => {
+            const parsed = pairing ?? parsePairingCode(pairInput);
+            const budget = parseAmount(budgetInput);
+            const days = Number(expiryDays);
+            if (!Number.isSafeInteger(days) || days < 1 || days > 30) throw new Error("expiry must be between 1 and 30 days");
+            const expiry = now + BigInt(days) * 86_400n;
+            if (expiry > BigInt(current.root.expiry)) throw new Error("expiry exceeds the root certificate's remaining lifetime");
+            return { pairing: parsed, capability: capValue(capability), budget, expiry };
+          })();
       const result = await issueCard({
         ledger: current,
         bundle: session.bundle,
-        pairing: parsed,
-        capability: capValue(capability),
-        budget,
-        expiry: now + BigInt(days) * 86_400n,
+        ...request,
         gateway,
         proofs,
         mailer,
@@ -413,40 +407,6 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     if (location.pathname.endsWith("/pair") && location.hash) {
       history.replaceState(null, "", `${location.pathname}${location.search}`);
     }
-    await refresh();
-    if (publishError) throw new Error(`Card is safe on-chain, but the owner recovery record could not be published: ${publishError}`);
-    if (deliveryError) throw new Error(`Card is safe on-chain, but credential delivery failed: ${deliveryError}`);
-  });
-
-  const handleResumePending = () => run("issue", async () => {
-    let deliveryError: string | undefined;
-    let publishError: string | undefined;
-    await withCrossTabLock(walletLockName, async () => {
-      const current = await loadFreshLedger();
-      const pending = current.pendingTransfer;
-      if (!pending) throw new Error("there is no pending card to resume");
-      const result = await issueCard({
-        ledger: current,
-        bundle: session.bundle,
-        pairing: pendingPairing(pending),
-        capability: BigInt(pending.card.cap),
-        budget: BigInt(pending.card.budget),
-        expiry: BigInt(pending.card.expiry),
-        gateway,
-        proofs,
-        mailer,
-        onCheckpoint: persist,
-        progress: setProgress,
-      });
-      await persist(result.ledger);
-      try {
-        const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
-        await persist(published);
-      } catch (cause) {
-        publishError = errorMessage(cause);
-      }
-      deliveryError = result.deliveryError;
-    });
     await refresh();
     if (publishError) throw new Error(`Card is safe on-chain, but the owner recovery record could not be published: ${publishError}`);
     if (deliveryError) throw new Error(`Card is safe on-chain, but credential delivery failed: ${deliveryError}`);
@@ -611,7 +571,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
               <div className="compact-card pending-transfer-card">
                 <span className="status-dot pending" />
                 <div><strong>{pendingTransfer.card.name}</strong><span>pending transfer / {formatAmount(BigInt(pendingTransfer.card.budget))} USDC</span></div>
-                <button className="icon-button" onClick={handleResumePending} disabled={busy !== null} title="Resume pending card" aria-label="Resume pending card"><RefreshCw size={17} /></button>
+                <button className="icon-button" onClick={handleIssue} disabled={busy !== null} title="Resume pending card" aria-label="Resume pending card"><RefreshCw size={17} /></button>
               </div>
             )}
             {tree?.cards.length ? tree.cards.map((card) => {
@@ -667,7 +627,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
               <label className="field"><span>Budget</span><input data-testid="card-budget" inputMode="decimal" value={budgetInput} onChange={(event) => setBudgetInput(event.target.value)} /></label>
               <label className="field"><span>Expires</span><select value={expiryDays} onChange={(event) => setExpiryDays(event.target.value)}><option value="1" disabled={maximumExpiryDays < 1}>1 day</option><option value="7" disabled={maximumExpiryDays < 7}>7 days</option><option value="30" disabled={maximumExpiryDays < 30}>30 days</option></select></label>
             </div>
-            <button className="button primary wide" data-testid="issue-card" onClick={pendingTransfer ? handleResumePending : handleIssue} disabled={busy !== null || !chainState || (!pendingTransfer && (!pairing || availableBudget <= 0n || expiryInvalid))}>
+            <button className="button primary wide" data-testid="issue-card" onClick={handleIssue} disabled={busy !== null || !chainState || (!pendingTransfer && (!pairing || availableBudget <= 0n || expiryInvalid))}>
               {busy === "issue" ? <LoaderCircle className="spin" size={17} /> : pendingTransfer ? <RefreshCw size={17} /> : <Plus size={17} />}
               {pendingTransfer ? "Resume pending card" : "Issue and deliver"}
             </button>
