@@ -3,7 +3,9 @@ import {
   createNote,
   encodeNoteMemo,
   issue,
+  keyEntry,
   noteCm,
+  truncateKey,
   transferInput,
   verifyBundleCert,
   type CertificateBundle,
@@ -362,6 +364,9 @@ export async function issueCard(options: IssueCardOptions): Promise<IssueCardRes
   const root = options.ledger.root;
   const rootHash = BigInt(root.hash);
   if (state.rootTree.indexOf(rootHash) < 0) throw new Error("root certificate is not registered on-chain");
+  if (state.revoked.has(truncateKey(rootHash)) || state.revoked.has(truncateKey(keyEntry(options.bundle.steward)))) {
+    throw new Error("wallet authorization tree is revoked");
+  }
   if (options.ledger.pendingTransfer) {
     if (!pendingMatchesRequest(options.ledger.pendingTransfer, options)) {
       const card = options.ledger.pendingTransfer.card;

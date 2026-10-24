@@ -14,6 +14,8 @@ import {
 } from "@shadowpass/mcp";
 import { ChainState, loadDeployment, MailboxClient } from "@shadowpass/sdk";
 import { createPublicClient, http } from "viem";
+import { BrowserWalletGateway } from "../src/flows/chain.js";
+import { preparePayment, registerActionState, submitAction } from "./live-chain-actions.mts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");
@@ -89,6 +91,27 @@ async function readLedger(page: import("playwright").Page): Promise<{ cards: Arr
   });
 }
 
+async function issueDiagnostics(page: import("playwright").Page): Promise<unknown> {
+  return page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("shadowpass-wallet", 2);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const rows = await new Promise<any[]>((resolve, reject) => {
+      const request = database.transaction("wallet-state", "readonly").objectStore("wallet-state").getAll();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const ledger = rows.find((row) => row.id.startsWith("ledger:"))?.value;
+    return {
+      budgetAvailable: document.querySelector(".budget-source")?.textContent ?? "",
+      error: document.querySelector(".console-error")?.textContent ?? "",
+      ledger: ledger ? { root: ledger.root?.hash ?? null, notes: ledger.notes?.length ?? 0, cards: ledger.cards?.length ?? 0 } : null,
+    };
+  });
+}
+
 try {
   await Promise.all([
     waitForRpc(rpcUrl),
@@ -118,7 +141,7 @@ try {
   try {
     const context = await chrome.newContext({ viewport: { width: 1440, height: 1000 } });
     await context.addInitScript({ path: path.join(here, "install-passkey-double.js") });
-    const page = await context.newPage();
+    let page = await context.newPage();
     await page.goto(url);
     assert.equal(await page.evaluate(async () => {
       const credential = await navigator.credentials.create({ publicKey: { challenge: new Uint8Array([1]).buffer } });
@@ -161,7 +184,7 @@ try {
     const depositMs = Date.now() - depositStarted;
     await page.screenshot({ path: path.join(outputDir, "wallet-funded-100.png"), fullPage: true });
 
-    const secondPage = await context.newPage();
+    let secondPage = await context.newPage();
     await secondPage.goto(url);
     await secondPage.locator(".passkey-row").first().click();
     await secondPage.locator(".owner-console").waitFor({ timeout: 30_000 });
@@ -183,7 +206,13 @@ try {
     await secondPage.getByTestId("card-budget").fill("50");
     await secondPage.getByLabel("Expires").selectOption("1");
     const treasuryStarted = Date.now();
-    await secondPage.getByTestId("issue-card").click();
+    try {
+      await secondPage.getByTestId("issue-card").click();
+    } catch (error) {
+      await secondPage.screenshot({ path: path.join(outputDir, "wallet-browser-chain-failure.png"), fullPage: true });
+      process.stderr.write(`[browser treasury issue] ${JSON.stringify(await issueDiagnostics(secondPage))}\n`);
+      throw error;
+    }
     const treasuryMs = await waitForIssue(secondPage, treasuryStarted);
 
     await secondPage.getByRole("button", { name: "Authorization", exact: true }).click();
@@ -224,15 +253,61 @@ try {
     assert.ok(ledger.cards.every((card) => /^0x[0-9a-f]{64}$/i.test(card.issueTx)));
     assert.ok(ledger.cards.every((card) => /^0x[0-9a-f]{64}$/i.test(card.transferTx)));
 
+    const buyerBundle = await buyerStore.loadBundle();
+    if (!buyerBundle) throw new Error("buyer credential bundle is missing");
+    const gateway = new BrowserWalletGateway({ rpcUrl, facilitatorUrl, deployment });
+    const malicious = await preparePayment({
+      deployment,
+      state,
+      store: buyerStore,
+      bundle: buyerBundle,
+      note: buyerBundle.note,
+      amount: 5_000_000n,
+      payTo: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      resource: "shadowpass://browser-e2e/malicious",
+      seed: "browser-alert-payment",
+      artifactsDir: path.join(root, "apps/wallet/public/zk/circuits-v2"),
+    });
+    await registerActionState(gateway, malicious);
+    const alertStarted = Date.now();
+    await page.close();
+    await secondPage.close();
+    const maliciousTx = await submitAction(client, rpcUrl, deployment, malicious);
+    await client.request({ method: "evm_increaseTime", params: [31] } as any);
+    await client.request({ method: "evm_mine", params: [] } as any);
+    page = await context.newPage();
+    await page.goto(url);
+    await page.locator(".passkey-row").first().click();
+    await page.locator(".owner-console").waitFor({ timeout: 30_000 });
+    await page.getByTestId("bill-alert").waitFor({ timeout: 45_000 });
+    const alertText = await page.getByTestId("bill-alert").textContent();
+    assert.match(alertText ?? "", /Unreported spend/);
+    await page.waitForFunction(() => document.title.includes("ShadowPass:"));
+    const alertMs = Date.now() - alertStarted;
+    await page.getByRole("button", { name: "Review bills", exact: true }).click();
+    await page.getByTestId("bill-row").first().waitFor();
+    assert.match(await page.locator(".bills-layout").textContent() ?? "", /Unreported/);
+    await page.screenshot({ path: path.join(outputDir, "wallet-unreported-bill.png"), fullPage: true });
+
+    await page.getByRole("button", { name: "Authorization", exact: true }).click();
+    await page.getByTestId("revoke-buyer").click();
+    await page.getByRole("button", { name: "Confirm revoke", exact: true }).click();
+    await page.getByText("revoked", { exact: true }).waitFor({ timeout: 30_000 });
+    const graceText = await page.locator(".grace-window").textContent();
+    assert.match(graceText ?? "", /10s/);
+    await page.screenshot({ path: path.join(outputDir, "wallet-revoked-grace.png"), fullPage: true });
+
     console.log(JSON.stringify({
       ok: true,
       browser: { channel: "chrome", version: chrome.version(), platform: process.platform, arm64: process.arch === "arm64" },
-      timingsMs: { onboard: onboardMs, faucetDeposit100: depositMs, issuePay40: payMs, issueTreasury50: treasuryMs },
+      timingsMs: { onboard: onboardMs, faucetDeposit100: depositMs, issuePay40: payMs, issueTreasury50: treasuryMs, alertAfterChainTx: alertMs },
       cardTimings: ledger.cards.map((card) => card.timings),
       authorizationTree: { cards: 2, stewardRemaining: "10000000" },
       crossTabIssuance: { pages: 2, cards: ledger.cards.length },
+      alertAfterReopen: true,
       mcp: [{ name: buyerStore.name, ...buyerStatus }, { name: treasuryStore.name, ...treasuryStatus }],
-      screenshots: ["wallet-funded-100.png", "wallet-authorization-tree.png"],
+      transactions: { maliciousPayment: maliciousTx },
+      screenshots: ["wallet-funded-100.png", "wallet-authorization-tree.png", "wallet-unreported-bill.png", "wallet-revoked-grace.png"],
     }, null, 2));
     await context.close();
   } finally {

@@ -2,6 +2,7 @@ import {
   ChainState,
   decodeShadowEvent,
   shadowEventTopics,
+  type ChainLogClient,
   type Deployment,
   type Hex,
   type Note,
@@ -23,6 +24,7 @@ const registryAbi = parseAbi([
   "function domain() view returns (uint256)",
   "function leafOfNullifier(uint256 nf) view returns (uint256)",
 ]);
+const revocationsAbi = parseAbi(["function window() view returns (uint64)"]);
 const tokenAbi = parseAbi([
   "function approve(address spender,uint256 amount) returns (bool)",
 ]);
@@ -61,12 +63,86 @@ export interface SubmitExternalDepositOptions {
   waitForReceipt(hash: Hex): Promise<{ status: string; blockNumber: bigint; logs: unknown[] }>;
 }
 
+export interface WalletSyncSnapshot {
+  state: ChainState;
+  logs: unknown[];
+}
+
+export class IncrementalShadowLogSync {
+  private state?: ChainState;
+  private cachedLogs: unknown[] = [];
+  private pollPromise?: Promise<WalletSyncSnapshot>;
+
+  constructor(
+    private readonly client: Pick<ChainLogClient, "getLogs" | "getBlockNumber">,
+    private readonly deployment: Deployment,
+  ) {}
+
+  poll(): Promise<WalletSyncSnapshot> {
+    if (this.pollPromise) return this.pollPromise;
+    const promise = this.pollOnce();
+    this.pollPromise = promise;
+    void promise.then(
+      () => { if (this.pollPromise === promise) this.pollPromise = undefined; },
+      () => { if (this.pollPromise === promise) this.pollPromise = undefined; },
+    );
+    return promise;
+  }
+
+  private async pollOnce(): Promise<WalletSyncSnapshot> {
+    if (!this.client.getBlockNumber) throw new Error("chain log client must expose getBlockNumber");
+    const latest = await this.client.getBlockNumber();
+    // Rebuild only from a lost cursor or rollback; normal polls replay just the new block range.
+    if (!this.state || latest < this.state.lastBlock) {
+      const logs = await this.fetchLogs(BigInt(this.deployment.startBlock), latest);
+      const state = ChainState.fromLogs(this.deployment, logs, { startBlock: this.deployment.startBlock });
+      state.lastBlock = latest;
+      this.state = state;
+      this.cachedLogs = logs;
+      return { state, logs: this.cachedLogs };
+    }
+
+    const fromBlock = this.state.lastBlock + 1n;
+    if (fromBlock <= latest) {
+      const logs = await this.fetchLogs(fromBlock, latest);
+      try {
+        this.state.replay(logs);
+      } catch (error) {
+        this.state = undefined;
+        this.cachedLogs = [];
+        throw error;
+      }
+      this.state.lastBlock = latest;
+      this.cachedLogs.push(...logs);
+    }
+    return { state: this.state, logs: this.cachedLogs };
+  }
+
+  private async fetchLogs(fromBlock: bigint, latest: bigint): Promise<unknown[]> {
+    const output: unknown[] = [];
+    const range = 2_000n;
+    for (let start = fromBlock; start <= latest; start += range) {
+      const candidate = start + range - 1n;
+      output.push(...await this.client.getLogs({
+        address: [this.deployment.gate, this.deployment.registry, this.deployment.revocations, this.deployment.group],
+        fromBlock: start,
+        toBlock: candidate < latest ? candidate : latest,
+        topics: [shadowEventTopics],
+      }));
+    }
+    return output;
+  }
+}
+
 export interface WalletGateway {
+  poll(): Promise<WalletSyncSnapshot>;
   sync(): Promise<ChainState>;
   logs(): Promise<unknown[]>;
-  relay(action: "join" | "register" | "faucetDeposit" | "issue" | "transferBudget" | "registerState", args: Record<string, unknown>): Promise<RelayResult>;
+  blockTimestamps(blockNumbers: readonly bigint[]): Promise<Map<string, number>>;
+  relay(action: "join" | "register" | "faucetDeposit" | "issue" | "transferBudget" | "registerState" | "revoke", args: Record<string, unknown>): Promise<RelayResult>;
   registryDomain(): Promise<bigint>;
   registryLeaf(nf: bigint): Promise<bigint>;
+  revocationWindow(): Promise<bigint>;
   externalDeposit(input: ExternalDepositInput): Promise<ExternalDepositResult>;
 }
 
@@ -117,6 +193,8 @@ declare global {
 
 export class BrowserWalletGateway implements WalletGateway {
   private readonly publicClient: PublicClient;
+  private readonly blockTimeCache = new Map<string, number>();
+  private readonly chainSync: IncrementalShadowLogSync;
 
   constructor(
     private readonly config: {
@@ -126,29 +204,32 @@ export class BrowserWalletGateway implements WalletGateway {
     },
   ) {
     this.publicClient = createPublicClient({ transport: http(config.rpcUrl) }) as PublicClient;
+    this.chainSync = new IncrementalShadowLogSync(this.publicClient, config.deployment);
   }
 
-  sync(): Promise<ChainState> {
-    return ChainState.sync(this.publicClient, this.config.deployment);
+  poll(): Promise<WalletSyncSnapshot> {
+    return this.chainSync.poll();
+  }
+
+  async sync(): Promise<ChainState> {
+    return (await this.poll()).state;
   }
 
   async logs(): Promise<unknown[]> {
-    const latest = await this.publicClient.getBlockNumber();
-    const output: unknown[] = [];
-    const range = 2_000n;
-    for (let fromBlock = BigInt(this.config.deployment.startBlock); fromBlock <= latest; fromBlock += range) {
-      const candidate = fromBlock + range - 1n;
-      output.push(...await (this.publicClient as any).getLogs({
-        address: [
-          this.config.deployment.gate,
-          this.config.deployment.registry,
-          this.config.deployment.revocations,
-          this.config.deployment.group,
-        ],
-        fromBlock,
-        toBlock: candidate < latest ? candidate : latest,
-        topics: [shadowEventTopics],
-      }));
+    return (await this.poll()).logs;
+  }
+
+  async blockTimestamps(blockNumbers: readonly bigint[]): Promise<Map<string, number>> {
+    const output = new Map<string, number>();
+    const missing = [...new Set(blockNumbers.map(String))]
+      .filter((key) => !this.blockTimeCache.has(key));
+    await Promise.all(missing.map(async (key) => {
+      const block = await this.publicClient.getBlock({ blockNumber: BigInt(key) });
+      this.blockTimeCache.set(key, Number(block.timestamp) * 1_000);
+    }));
+    for (const key of blockNumbers.map(String)) {
+      const value = this.blockTimeCache.get(key);
+      if (value !== undefined) output.set(key, value);
     }
     return output;
   }
@@ -167,6 +248,14 @@ export class BrowserWalletGateway implements WalletGateway {
       abi: registryAbi,
       functionName: "leafOfNullifier",
       args: [nf],
+    });
+  }
+
+  async revocationWindow(): Promise<bigint> {
+    return this.publicClient.readContract({
+      address: this.config.deployment.revocations,
+      abi: revocationsAbi,
+      functionName: "window",
     });
   }
 

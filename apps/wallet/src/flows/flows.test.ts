@@ -51,8 +51,16 @@ class FakeGateway implements WalletGateway {
     return this.state;
   }
 
+  async poll(): Promise<{ state: ChainState; logs: unknown[] }> {
+    return { state: this.state, logs: this.emittedLogs };
+  }
+
   async logs(): Promise<unknown[]> {
     return this.emittedLogs;
+  }
+
+  async blockTimestamps(blockNumbers: readonly bigint[]): Promise<Map<string, number>> {
+    return new Map(blockNumbers.map((block) => [block.toString(), 2_000_000_000_000]));
   }
 
   async registryDomain(): Promise<bigint> {
@@ -61,6 +69,10 @@ class FakeGateway implements WalletGateway {
 
   async registryLeaf(nf: bigint): Promise<bigint> {
     return this.registryLeaves.get(nf.toString()) ?? 0n;
+  }
+
+  async revocationWindow(): Promise<bigint> {
+    return 10n;
   }
 
   async externalDeposit(): Promise<{ transaction: `0x${string}`; blockNumber: bigint; logs: unknown[] }> {

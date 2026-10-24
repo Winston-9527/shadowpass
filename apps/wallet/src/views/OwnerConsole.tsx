@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -13,21 +13,24 @@ import {
   Plus,
   RefreshCw,
   ScanLine,
+  ReceiptText,
   Send,
   Shield,
   TreePine,
   WalletCards,
+  X,
 } from "lucide-react";
 import {
   MailboxClient,
-  scanBill,
-  type BillEntry,
   type ChainState,
   type CircuitName,
 } from "@shadowpass/sdk";
 import type { WalletSession } from "../wallet/session";
 import { bytesToHex } from "../lib/bytes";
 import { BrowserWalletGateway, type WalletGateway } from "../flows/chain";
+import { getWalletState, saveWalletState } from "../keystore/db";
+import { DEFAULT_ALERT_RULES, alertRulesKey, evaluateBillAlerts, normalizeAlertRules, type AlertRules } from "../flows/alert-rules";
+import { loadBillSnapshot, type ChainDelegation, type ChainReceipt, type WalletBill } from "../flows/bill";
 import { deposit } from "../flows/deposit";
 import { deliverCardCredential, issueCard } from "../flows/issue";
 import { withCrossTabLock } from "../flows/lock";
@@ -35,6 +38,7 @@ import { loadLedger, saveLedger } from "../flows/ledger";
 import { onboard } from "../flows/onboard";
 import { pairingCodeFromLocation, parsePairingCode } from "../flows/pairing";
 import { SnarkProofService, type ProofService } from "../flows/prove";
+import { revokeAgent, revokeTree } from "../flows/revoke";
 import { publishOwnerRecords, recoverNotes, restoreOwnerRecords } from "../flows/snapshot";
 import {
   capValue,
@@ -47,10 +51,12 @@ import {
   type WalletLedger,
 } from "../flows/types";
 import type { WalletConfig } from "../flows/config";
+import { useBillAlerts } from "../alerts/useBillAlerts";
+import { Bill } from "./Bill";
 import { Tree, buildAuthorizationTree } from "./Tree";
 
-type Tab = "wallet" | "issue" | "tree";
-type Busy = null | "onboard" | "deposit" | "issue" | "refresh";
+type Tab = "wallet" | "bills" | "issue" | "tree";
+type Busy = null | "onboard" | "deposit" | "issue" | "refresh" | "revoke";
 
 export interface OwnerConsoleProps {
   session: WalletSession;
@@ -92,10 +98,17 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
   const [tab, setTab] = useState<Tab>("wallet");
   const [ledger, setLedger] = useState<WalletLedger | null>(null);
   const [chainState, setChainState] = useState<ChainState | null>(null);
-  const [bills, setBills] = useState<BillEntry[]>([]);
+  const [bills, setBills] = useState<WalletBill[]>([]);
+  const [alertRules, setAlertRules] = useState<AlertRules>(DEFAULT_ALERT_RULES);
+  const [revocationWindowSeconds, setRevocationWindowSeconds] = useState<bigint | null>(null);
+  const [revocationNotice, setRevocationNotice] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState<"tree" | string | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
+  const [chainRevision, setChainRevision] = useState(0);
+  const [latestBlockTimeMs, setLatestBlockTimeMs] = useState(0);
   const [pairInput, setPairInput] = useState(initialPairInput);
   const [pairing, setPairing] = useState<PairingPayload | null>(() => {
     if (!initialPairInput) return null;
@@ -106,13 +119,25 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
   const [expiryDays, setExpiryDays] = useState("1");
   const [depositMethod, setDepositMethod] = useState<"faucet" | "external">("faucet");
   const pairingScanInput = useRef<HTMLInputElement | null>(null);
+  const ledgerRef = useRef<WalletLedger | null>(null);
+  const pollingRef = useRef(false);
+  const busyRef = useRef(false);
+  const mailboxCursorRef = useRef(0);
+  const receiptsRef = useRef<ChainReceipt[]>([]);
+  const delegationsRef = useRef<ChainDelegation[]>([]);
 
   const gateway = useMemo(() => injectedGateway ?? new BrowserWalletGateway(config), [config, injectedGateway]);
   const proofs = useMemo(() => injectedProofs ?? new SnarkProofService(config.artifactsUrl), [config.artifactsUrl, injectedProofs]);
   const mailer = useMemo(() => injectedMailer ?? new MailboxClient(config.mailboxUrl), [config.mailboxUrl, injectedMailer]);
+  const alerts = useMemo(
+    () => latestBlockTimeMs === 0 ? [] : evaluateBillAlerts(bills, alertRules, latestBlockTimeMs),
+    [alertRules, bills, latestBlockTimeMs],
+  );
+  const alertHistoryStorageKey = `${alertRulesKey(config.deployment.chainId, config.network, session.bundle.sign.Ax)}:delivered`;
+  const pageAlerts = useBillAlerts(alerts, alertHistoryStorageKey);
   const tree = useMemo(
     () => ledger && chainState ? buildAuthorizationTree(ledger, session.bundle, chainState, bills) : null,
-    [bills, chainState, ledger, session.bundle],
+    [bills, chainRevision, chainState, ledger, session.bundle],
   );
   const maximumExpiryDays = ledger?.root
     ? Math.max(0, Math.floor((Number(ledger.root.expiry) * 1_000 - Date.now()) / 86_400_000))
@@ -120,18 +145,36 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
 
   const persist = async (next: WalletLedger) => {
     await saveLedger(next);
+    ledgerRef.current = next;
     setLedger(structuredClone(next));
   };
 
   const walletLockName = `shadowpass:wallet:${config.deployment.chainId}:${session.bundle.sign.Ax.toString()}`;
   const loadFreshLedger = () => loadLedger(config.deployment.chainId, config.network, session.bundle.sign.Ax);
 
-  const refresh = async () => {
-    const [state, logs] = await Promise.all([gateway.sync(), gateway.logs()]);
-    setChainState(state);
-    setBills(scanBill(state, logs, session.bundle.view.vsk));
-    return state;
-  };
+  const refresh = useCallback(async () => {
+    const currentLedger = await loadFreshLedger();
+    ledgerRef.current = currentLedger;
+    setLedger(structuredClone(currentLedger));
+    const snapshot = await loadBillSnapshot({
+      ledger: currentLedger,
+      gateway,
+      mailbox: mailer,
+      bundle: session.bundle,
+      mailboxCursor: mailboxCursorRef.current,
+      receipts: receiptsRef.current,
+      delegations: delegationsRef.current,
+    });
+    mailboxCursorRef.current = snapshot.mailboxCursor;
+    receiptsRef.current = snapshot.receipts;
+    delegationsRef.current = snapshot.delegations;
+    setChainState(snapshot.state);
+    setLatestBlockTimeMs(snapshot.latestBlockTimeMs);
+    setBills(snapshot.bills);
+    setChainRevision((revision) => revision + 1);
+    setPollError(null);
+    return snapshot.state;
+  }, [config.deployment.chainId, config.network, gateway, mailer, session.bundle]);
 
   useEffect(() => {
     let active = true;
@@ -141,7 +184,8 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       try {
         const mounted = await withCrossTabLock(walletLockName, async () => {
           const base = await loadLedger(config.deployment.chainId, config.network, session.bundle.sign.Ax);
-          const [state, logs] = await Promise.all([gateway.sync(), gateway.logs()]);
+          const sync = await gateway.poll();
+          const state = sync.state;
           let records = base;
           let mailboxWarning: string | null = null;
           try {
@@ -151,12 +195,33 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
           }
           const restored = await recoverNotes(records, session.bundle, state);
           await saveLedger(restored);
-          return { restored, state, logs, mailboxWarning };
+          return { restored, state, logs: sync.logs, mailboxWarning };
         });
         if (!active) return;
+        ledgerRef.current = mounted.restored;
         setLedger(mounted.restored);
         setChainState(mounted.state);
-        setBills(scanBill(mounted.state, mounted.logs, session.bundle.view.vsk));
+        const billSnapshot = await loadBillSnapshot({
+          ledger: mounted.restored,
+          gateway,
+          mailbox: mailer,
+          bundle: session.bundle,
+          receipts: receiptsRef.current,
+          delegations: delegationsRef.current,
+        });
+        if (!active) return;
+        mailboxCursorRef.current = billSnapshot.mailboxCursor;
+        receiptsRef.current = billSnapshot.receipts;
+        delegationsRef.current = billSnapshot.delegations;
+        setChainState(billSnapshot.state);
+        setLatestBlockTimeMs(billSnapshot.latestBlockTimeMs);
+        setBills(billSnapshot.bills);
+        setChainRevision((revision) => revision + 1);
+        const rules = await getWalletState<AlertRules>(alertRulesKey(config.deployment.chainId, config.network, session.bundle.sign.Ax));
+        const windowSeconds = await gateway.revocationWindow();
+        if (!active) return;
+        setAlertRules(normalizeAlertRules(rules));
+        setRevocationWindowSeconds(windowSeconds);
         if (mounted.mailboxWarning) setError(mounted.mailboxWarning);
       } catch (cause) {
         if (active) setError(errorMessage(cause));
@@ -167,7 +232,35 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     return () => { active = false; };
   }, [config, gateway, mailer, session.bundle, walletLockName]);
 
+  useEffect(() => {
+    if (!ledger) return;
+    ledgerRef.current = ledger;
+  }, [ledger]);
+
+  useEffect(() => {
+    if (!ledger) return;
+    let active = true;
+    const pollNow = () => {
+      if (!active || pollingRef.current || busyRef.current) return;
+      pollingRef.current = true;
+      void refresh()
+        .catch((cause) => { if (active) setPollError(errorMessage(cause)); })
+        .finally(() => { pollingRef.current = false; });
+    };
+    const interval = window.setInterval(pollNow, 7_000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") pollNow();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [Boolean(ledger), refresh]);
+
   const run = async (kind: Exclude<Busy, null>, action: () => Promise<void>) => {
+    busyRef.current = true;
     setBusy(kind);
     setError(null);
     setProgress(null);
@@ -177,6 +270,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       setError(errorMessage(cause));
       try { await refresh(); } catch { /* the visible error is more useful than a secondary RPC failure */ }
     } finally {
+      busyRef.current = false;
       setBusy(null);
       setProgress(null);
     }
@@ -265,26 +359,33 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
 
   const handleIssue = () => run("issue", async () => {
     if (!ledger) throw new Error("wallet ledger is not ready");
-    const parsed = pairing ?? parsePairingCode(pairInput);
-    const budget = parseAmount(budgetInput);
-    const days = Number(expiryDays);
-    if (!Number.isSafeInteger(days) || days < 1 || days > 30) throw new Error("expiry must be between 1 and 30 days");
     let deliveryError: string | undefined;
     let publishError: string | undefined;
     await withCrossTabLock(walletLockName, async () => {
       const current = await loadFreshLedger();
       const now = BigInt(Math.floor(Date.now() / 1000));
       if (!current.root) throw new Error("onboard the wallet before issuing a card");
-      if (now + BigInt(days) * 86_400n > BigInt(current.root.expiry)) {
-        throw new Error("expiry exceeds the root certificate's remaining lifetime");
-      }
+      const pending = current.pendingTransfer;
+      const request = pending
+        ? {
+            pairing: pendingPairing(pending),
+            capability: BigInt(pending.card.cap),
+            budget: BigInt(pending.card.budget),
+            expiry: BigInt(pending.card.expiry),
+          }
+        : (() => {
+            const parsed = pairing ?? parsePairingCode(pairInput);
+            const budget = parseAmount(budgetInput);
+            const days = Number(expiryDays);
+            if (!Number.isSafeInteger(days) || days < 1 || days > 30) throw new Error("expiry must be between 1 and 30 days");
+            const expiry = now + BigInt(days) * 86_400n;
+            if (expiry > BigInt(current.root.expiry)) throw new Error("expiry exceeds the root certificate's remaining lifetime");
+            return { pairing: parsed, capability: capValue(capability), budget, expiry };
+          })();
       const result = await issueCard({
         ledger: current,
         bundle: session.bundle,
-        pairing: parsed,
-        capability: capValue(capability),
-        budget,
-        expiry: now + BigInt(days) * 86_400n,
+        ...request,
         gateway,
         proofs,
         mailer,
@@ -306,40 +407,6 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     if (location.pathname.endsWith("/pair") && location.hash) {
       history.replaceState(null, "", `${location.pathname}${location.search}`);
     }
-    await refresh();
-    if (publishError) throw new Error(`Card is safe on-chain, but the owner recovery record could not be published: ${publishError}`);
-    if (deliveryError) throw new Error(`Card is safe on-chain, but credential delivery failed: ${deliveryError}`);
-  });
-
-  const handleResumePending = () => run("issue", async () => {
-    let deliveryError: string | undefined;
-    let publishError: string | undefined;
-    await withCrossTabLock(walletLockName, async () => {
-      const current = await loadFreshLedger();
-      const pending = current.pendingTransfer;
-      if (!pending) throw new Error("there is no pending card to resume");
-      const result = await issueCard({
-        ledger: current,
-        bundle: session.bundle,
-        pairing: pendingPairing(pending),
-        capability: BigInt(pending.card.cap),
-        budget: BigInt(pending.card.budget),
-        expiry: BigInt(pending.card.expiry),
-        gateway,
-        proofs,
-        mailer,
-        onCheckpoint: persist,
-        progress: setProgress,
-      });
-      await persist(result.ledger);
-      try {
-        const published = await publishOwnerRecords(mailer, session.bundle, result.ledger, persist);
-        await persist(published);
-      } catch (cause) {
-        publishError = errorMessage(cause);
-      }
-      deliveryError = result.deliveryError;
-    });
     await refresh();
     if (publishError) throw new Error(`Card is safe on-chain, but the owner recovery record could not be published: ${publishError}`);
     if (deliveryError) throw new Error(`Card is safe on-chain, but credential delivery failed: ${deliveryError}`);
@@ -367,6 +434,47 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     await refresh();
   });
 
+  const handleAlertRules = (next: AlertRules) => {
+    const normalized = normalizeAlertRules(next);
+    setAlertRules(normalized);
+    void saveWalletState(
+      alertRulesKey(config.deployment.chainId, config.network, session.bundle.sign.Ax),
+      normalized,
+    ).catch((cause) => setError(errorMessage(cause)));
+  };
+
+  const handleRevokeCard = (cardId: string) => run("revoke", async () => {
+    if (!ledger) throw new Error("wallet ledger is not ready");
+    const card = ledger.cards.find((candidate) => candidate.id === cardId);
+    if (!card) throw new Error("Agent card is not available");
+    setRevoking(cardId);
+    try {
+      const result = await revokeAgent({ ledger, bundle: session.bundle, gateway, proofs, card, progress: setProgress });
+      const windowSeconds = revocationWindowSeconds ?? await gateway.revocationWindow();
+      setRevocationWindowSeconds(windowSeconds);
+      setRevocationNotice(`${card.name} was revoked on-chain. The previous root remains valid for up to ${windowSeconds.toString()}s.`);
+      await refresh();
+      if (!result.transaction) throw new Error("revocation transaction was not returned");
+    } finally {
+      setRevoking(null);
+    }
+  });
+
+  const handleRevokeTree = () => run("revoke", async () => {
+    if (!ledger) throw new Error("wallet ledger is not ready");
+    setRevoking("tree");
+    try {
+      const result = await revokeTree({ ledger, bundle: session.bundle, gateway, proofs, progress: setProgress });
+      const windowSeconds = revocationWindowSeconds ?? await gateway.revocationWindow();
+      setRevocationWindowSeconds(windowSeconds);
+      setRevocationNotice(`The authorization tree was revoked on-chain. Previous proofs remain valid for up to ${windowSeconds.toString()}s.`);
+      await refresh();
+      if (!result.transaction) throw new Error("revocation transaction was not returned");
+    } finally {
+      setRevoking(null);
+    }
+  });
+
   if (!ledger) {
     return (
       <section className="console-loading">
@@ -375,16 +483,20 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
     );
   }
 
+  const readableBills = bills.filter((bill) => bill.chain !== null);
+  const displayError = error ?? pollError;
   const availableBudget = tree?.stewardBudget ?? 0n;
   const currentRoot = ledger.root;
   const pendingTransfer = ledger.pendingTransfer;
   const rootReady = Boolean(currentRoot && chainState && chainState.rootTree.indexOf(BigInt(currentRoot.hash)) >= 0);
   const expiryInvalid = Number(expiryDays) > maximumExpiryDays;
+  const unreportedCount = readableBills.filter((bill) => !bill.reported).length;
 
   return (
     <div className="owner-console">
       <nav className="console-tabs" aria-label="Wallet sections">
         <button className={tab === "wallet" ? "active" : ""} onClick={() => setTab("wallet")}><WalletCards size={17} />Wallet</button>
+        <button className={tab === "bills" ? "active" : ""} onClick={() => setTab("bills")}><ReceiptText size={17} />Bills{unreportedCount > 0 && <span className="tab-count">{unreportedCount}</span>}</button>
         <button className={tab === "issue" ? "active" : ""} onClick={() => setTab("issue")}><CreditCard size={17} />Issue card</button>
         <button className={tab === "tree" ? "active" : ""} onClick={() => setTab("tree")}><TreePine size={17} />Authorization</button>
       </nav>
@@ -399,7 +511,22 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
       </section>
 
       {progress && <section className="operation-banner"><LoaderCircle className="spin" size={16} />{progress}</section>}
-      {error && <section className="inline-error console-error" role="alert"><AlertTriangle size={16} /><span>{error}</span></section>}
+      {displayError && <section className="inline-error console-error" role="alert"><AlertTriangle size={16} /><span>{displayError}</span></section>}
+      {pageAlerts.active.length > 0 && (
+        <section className="page-alert" role="alert" data-testid="bill-alert">
+          <div className="page-alert-icon"><AlertTriangle size={20} /></div>
+          <div className="page-alert-copy">
+            <strong>{pageAlerts.active.length === 1 ? pageAlerts.active[0]!.title : `${pageAlerts.active.length} alerts need review`}</strong>
+            <ul>
+              {pageAlerts.active.map((alert) => (
+                <li key={alert.id}><span><b>{alert.title}:</b> {alert.detail}</span></li>
+              ))}
+            </ul>
+          </div>
+          <button className="button secondary compact" onClick={() => setTab("bills")}>Review bills</button>
+          <button className="icon-button" onClick={pageAlerts.dismiss} title="Dismiss alert" aria-label="Dismiss alert"><X size={17} /></button>
+        </section>
+      )}
 
       {tab === "wallet" && (
         <div className="console-grid">
@@ -444,7 +571,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
               <div className="compact-card pending-transfer-card">
                 <span className="status-dot pending" />
                 <div><strong>{pendingTransfer.card.name}</strong><span>pending transfer / {formatAmount(BigInt(pendingTransfer.card.budget))} USDC</span></div>
-                <button className="icon-button" onClick={handleResumePending} disabled={busy !== null} title="Resume pending card" aria-label="Resume pending card"><RefreshCw size={17} /></button>
+                <button className="icon-button" onClick={handleIssue} disabled={busy !== null} title="Resume pending card" aria-label="Resume pending card"><RefreshCw size={17} /></button>
               </div>
             )}
             {tree?.cards.length ? tree.cards.map((card) => {
@@ -500,7 +627,7 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
               <label className="field"><span>Budget</span><input data-testid="card-budget" inputMode="decimal" value={budgetInput} onChange={(event) => setBudgetInput(event.target.value)} /></label>
               <label className="field"><span>Expires</span><select value={expiryDays} onChange={(event) => setExpiryDays(event.target.value)}><option value="1" disabled={maximumExpiryDays < 1}>1 day</option><option value="7" disabled={maximumExpiryDays < 7}>7 days</option><option value="30" disabled={maximumExpiryDays < 30}>30 days</option></select></label>
             </div>
-            <button className="button primary wide" data-testid="issue-card" onClick={pendingTransfer ? handleResumePending : handleIssue} disabled={busy !== null || !chainState || (!pendingTransfer && (!pairing || availableBudget <= 0n || expiryInvalid))}>
+            <button className="button primary wide" data-testid="issue-card" onClick={handleIssue} disabled={busy !== null || !chainState || (!pendingTransfer && (!pairing || availableBudget <= 0n || expiryInvalid))}>
               {busy === "issue" ? <LoaderCircle className="spin" size={17} /> : pendingTransfer ? <RefreshCw size={17} /> : <Plus size={17} />}
               {pendingTransfer ? "Resume pending card" : "Issue and deliver"}
             </button>
@@ -509,7 +636,18 @@ export function OwnerConsole({ session, config, gateway: injectedGateway, proofs
         </div>
       )}
 
-      {tab === "tree" && tree && <Tree model={tree} />}
+      {tab === "bills" && <Bill bills={readableBills} rules={alertRules} alerts={alerts} onChangeRules={handleAlertRules} />}
+
+      {tab === "tree" && tree && (
+        <Tree
+          model={tree}
+          revocationWindowSeconds={revocationWindowSeconds}
+          revocationNotice={revocationNotice}
+          revoking={revoking}
+          onRevokeCard={(card) => handleRevokeCard(card.id)}
+          onRevokeTree={handleRevokeTree}
+        />
+      )}
     </div>
   );
 }

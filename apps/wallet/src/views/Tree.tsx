@@ -1,8 +1,9 @@
+import { useState } from "react";
+import { Ban, LoaderCircle, ShieldAlert } from "lucide-react";
 import {
   budgetNullifier,
   keyEntry,
   noteCm,
-  scanBill,
   truncateKey,
   type BillEntry,
   type ChainState,
@@ -22,6 +23,7 @@ export interface AuthorizationTreeModel {
   steward: string;
   rootCap: string;
   rootExpiry: string;
+  rootRevoked: boolean;
   stewardBudget: bigint;
   cards: AuthorizationCard[];
 }
@@ -52,6 +54,7 @@ export function buildAuthorizationTree(
   nowSeconds = BigInt(Math.floor(Date.now() / 1000)),
 ): AuthorizationTreeModel {
   const rootHash = ledger.root ? BigInt(ledger.root.hash) : 0n;
+  const rootRevoked = state.revoked.has(truncateKey(rootHash));
   const stewardKey = truncateKey(keyEntry(bundle.steward));
   const ownerKey = truncateKey(keyEntry(bundle.sign));
   const stewardBudget = ledger.notes
@@ -69,7 +72,7 @@ export function buildAuthorizationTree(
     .reduce((sum, note) => sum + note.q, 0n);
   const cards = ledger.cards.map((card): AuthorizationCard => {
     const note = noteFromCard(card);
-    const revoked = cardIsRevoked(card, state) || state.revoked.has(stewardKey) || state.revoked.has(ownerKey);
+    const revoked = rootRevoked || cardIsRevoked(card, state) || state.revoked.has(stewardKey) || state.revoked.has(ownerKey);
     const expired = nowSeconds > BigInt(card.expiry);
     const pending = card.status !== "delivered" || !note || state.notes.indexOf(noteCm(note)) < 0;
     const spent = spentForCard(card, bills);
@@ -85,6 +88,7 @@ export function buildAuthorizationTree(
     steward: bundle.steward.Ax.toString(),
     rootCap: ledger.root?.cap ?? "0",
     rootExpiry: ledger.root?.expiry ?? "0",
+    rootRevoked,
     stewardBudget,
     cards,
   };
@@ -102,16 +106,48 @@ function dateLabel(seconds: string): string {
   return new Date(Number(seconds) * 1000).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-export function Tree({ model }: { model: AuthorizationTreeModel }) {
+export interface TreeProps {
+  model: AuthorizationTreeModel;
+  revocationWindowSeconds?: bigint | null;
+  revocationNotice?: string | null;
+  revoking?: "tree" | string | null;
+  onRevokeCard?(card: AuthorizationCard): void;
+  onRevokeTree?(): void;
+}
+
+export function Tree({ model, revocationWindowSeconds, revocationNotice, revoking, onRevokeCard, onRevokeTree }: TreeProps) {
+  const [confirming, setConfirming] = useState<"tree" | string | null>(null);
+  const confirm = (target: "tree" | string, action?: () => void) => {
+    if (confirming !== target) {
+      setConfirming(target);
+      return;
+    }
+    setConfirming(null);
+    action?.();
+  };
+
   return (
     <section className="tree-panel" aria-label="Authorization tree">
+      {revocationNotice && <div className="revocation-notice" role="status"><ShieldAlert size={17} /><span>{revocationNotice}</span></div>}
       <div className="tree-owner">
         <div>
           <span className="eyebrow">Owner</span>
           <strong>Alice</strong>
           <code>{model.owner.slice(0, 18)}...</code>
         </div>
-        <div className="tree-budget">{formatAmount(model.stewardBudget)} <span>USDC available</span></div>
+        <div className="tree-owner-actions">
+          <div className="tree-budget">{formatAmount(model.stewardBudget)} <span>USDC available</span></div>
+          {onRevokeTree && !model.rootRevoked && (
+            <button
+              className={confirming === "tree" ? "button danger compact" : "button secondary compact"}
+              onClick={() => confirm("tree", onRevokeTree)}
+              disabled={revoking !== null && revoking !== undefined}
+            >
+              {revoking === "tree" ? <LoaderCircle className="spin" size={16} /> : <Ban size={16} />}
+              {confirming === "tree" ? "Confirm whole tree" : "Revoke tree"}
+            </button>
+          )}
+        </div>
       </div>
       <div className="tree-trunk" aria-hidden="true" />
       <div className="tree-steward">
@@ -120,8 +156,11 @@ export function Tree({ model }: { model: AuthorizationTreeModel }) {
           <span className="eyebrow">Wallet steward</span>
           <strong>{capLabel(model.rootCap)}</strong>
         </div>
-        <span className="muted">expires {dateLabel(model.rootExpiry)}</span>
+        <span className={model.rootRevoked ? "status-text revoked" : "muted"}>{model.rootRevoked ? "revoked" : `expires ${dateLabel(model.rootExpiry)}`}</span>
       </div>
+      {revocationWindowSeconds !== null && revocationWindowSeconds !== undefined && (
+        <div className="grace-window"><ShieldAlert size={15} /><span>On-chain grace window: {revocationWindowSeconds.toString()}s. Proofs from before revocation can still settle until it ends.</span></div>
+      )}
       <div className="tree-cards">
         {model.cards.length === 0 ? (
           <div className="tree-empty">No Agent cards issued</div>
@@ -139,6 +178,19 @@ export function Tree({ model }: { model: AuthorizationTreeModel }) {
               <code>{card.agentPk.x.slice(0, 16)}...</code>
             </div>
             <div className="budget-track"><span style={{ width: `${budgetPercent(card)}%` }} /></div>
+            {onRevokeCard && card.status !== "revoked" && (
+              <div className="tree-card-actions">
+                <button
+                  className={confirming === card.id ? "button danger compact" : "button secondary compact"}
+                  onClick={() => confirm(card.id, () => onRevokeCard(card))}
+                  disabled={revoking !== null && revoking !== undefined}
+                  data-testid={`revoke-${card.name}`}
+                >
+                  {revoking === card.id ? <LoaderCircle className="spin" size={15} /> : <Ban size={15} />}
+                  {confirming === card.id ? "Confirm revoke" : "Revoke Agent"}
+                </button>
+              </div>
+            )}
           </article>
         ))}
       </div>
