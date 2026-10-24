@@ -39,6 +39,12 @@ Vercel 项目 Root Directory 设为 `apps/wallet`，仓库内 `vercel.json` 会�
 
 本地钱包通过 Vite 的 `/facilitator` 同源代理访问 facilitator，默认目标为 `http://127.0.0.1:4022`。可用 `VITE_FACILITATOR_PROXY_TARGET` 改代理目标。这样浏览器不会直接跨域请求 relayer，也不需要给 facilitator 开放 CORS。
 
+## 模拟体验
+
+页面右上角的 **Simulation** 按钮进入纯本地演示，不需要 passkey、Mailbox、facilitator、证明产物或链上网络。演示中可以开通模拟钱包、充值 100 USDC、签发 PAY / TREASURY Agent 卡、模拟消费或理财动作、查看本地账单并吊销单卡或整棵授权树。
+
+模拟状态只保存在当前页面内存，退出或刷新即清空，不会写入 IndexedDB、Mailbox 或链。页面顶部和操作结果会持续标记 `Simulation`。退出模拟后，钱包恢复原来的真实模式；真实模式仍使用正常网络、证明和执行路径，失败时继续显示原始错误，不会自动降级或伪造成功。
+
 ## 配置
 
 | 变量 | 默认值 | 说明 |
