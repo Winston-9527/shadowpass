@@ -14,6 +14,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run test:mvp:agents
       - uses: foundry-rs/foundry-toolchain@v1
       - run: bash contracts/script/check-verifiers.sh
       # circuits need circom and build/ artifacts; they are tested locally (docs/ARCHITECTURE.md §6). contracts' test script runs forge.

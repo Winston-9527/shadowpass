@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
+    "test": "npm run test:mvp:agents && npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "dev:chain": "bash scripts/dev-chain.sh",
     "claude:mvp": "bash scripts/mvp/claude.sh",
