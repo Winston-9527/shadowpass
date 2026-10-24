@@ -5,6 +5,7 @@ import { ChainState } from "../src/state.js";
 import type { Cert } from "../src/types.js";
 import {
   actionInput,
+  groupCommitment,
   mintInput,
   registerInput,
   revokeCertInput,
@@ -131,6 +132,7 @@ describe("witness parity with circuits/scripts/world.mjs", () => {
     expect(actualD3.input).toEqual(expectedD3.input);
 
     const expectedRegister = expected.world.registerInput({ human: expected.alice, cert0: expected.c0, domain: 7n });
+    expect(groupCommitment(actual.alice)).toBe(expected.world.group.leaves.at(-1));
     const actualRegister = registerInput({
       human: actual.alice,
       cert0: sdkCert(actual.c0),

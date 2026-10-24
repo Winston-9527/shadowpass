@@ -1,4 +1,5 @@
 import { mkdir } from "node:fs/promises";
+import { createServer } from "node:http";
 import { chromium } from "playwright";
 import { build, preview } from "vite";
 import { startSlotServer } from "./dev-mailbox.mjs";
@@ -10,6 +11,36 @@ const mailbox = await startSlotServer(0);
 const mailboxAddress = mailbox.address();
 if (!mailboxAddress || typeof mailboxAddress === "string") throw new Error("mailbox did not bind a TCP port");
 process.env.VITE_MAILBOX_URL = `http://127.0.0.1:${mailboxAddress.port}`;
+
+const rpc = createServer((request, response) => {
+  response.setHeader("access-control-allow-origin", "*");
+  response.setHeader("access-control-allow-headers", "content-type");
+  if (request.method === "OPTIONS") {
+    response.writeHead(204).end();
+    return;
+  }
+  let body = "";
+  request.setEncoding("utf8");
+  request.on("data", (chunk) => { body += chunk; });
+  request.on("end", () => {
+    try {
+      const payload = JSON.parse(body);
+      const respond = (call) => ({
+        jsonrpc: "2.0",
+        id: call.id,
+        result: call.method === "eth_blockNumber" ? "0x0" : call.method === "eth_getLogs" ? [] : "0x0",
+      });
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify(Array.isArray(payload) ? payload.map(respond) : respond(payload)));
+    } catch {
+      response.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid rpc request" }));
+    }
+  });
+});
+await new Promise((resolve) => rpc.listen(0, "127.0.0.1", resolve));
+const rpcAddress = rpc.address();
+if (!rpcAddress || typeof rpcAddress === "string") throw new Error("rpc did not bind a TCP port");
+process.env.VITE_RPC_URL = `http://127.0.0.1:${rpcAddress.port}`;
 
 const configFile = new URL("../vite.config.ts", import.meta.url).pathname;
 await build({ configFile, mode: "production", logLevel: "silent" });
@@ -96,6 +127,30 @@ try {
   if (await page.locator(".key-row code").first().textContent() !== firstFingerprint) throw new Error("Second passkey changed the signing key");
   await page.screenshot({ path: new URL("wallet-unlocked.png", outputDir).pathname, fullPage: true });
 
+  const pairingCode = Buffer.from(JSON.stringify({
+    v: 1,
+    name: "采购 Agent",
+    agentPk: {
+      x: "5299619240641551281634865583518297030282874472190772894086521144482721001553",
+      y: "16950150798460657717958625567821834550301663161624707787222815936182638968203",
+    },
+    boxPk: "ab".repeat(32),
+    pair: "cd".repeat(16),
+  })).toString("base64url");
+  await page.goto(`${url.replace(/\/$/, "")}/pair#${pairingCode}`);
+  await page.locator(".passkey-row").first().click();
+  await waitForUnlocked(page);
+  try {
+    await page.locator(".owner-console").waitFor({ timeout: 15_000 });
+  } catch (error) {
+    console.error(JSON.stringify({ pageText: await page.locator("body").innerText(), url: page.url() }, null, 2));
+    throw error;
+  }
+  await page.getByRole("button", { name: "Issue card" }).click();
+  await page.getByText("Paired", { exact: true }).waitFor();
+  if (!(await page.getByTestId("pairing-code").inputValue()).includes(pairingCode)) throw new Error("Pairing code from the URL was not retained");
+  await page.screenshot({ path: new URL("wallet-pairing.png", outputDir).pathname, fullPage: true });
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
   await page.locator(".passkey-row").first().waitFor();
@@ -178,16 +233,27 @@ try {
   await enabledOnlyPage.getByRole("dialog").waitFor();
   await enabledOnlyContext.close();
 
+  const configFailureContext = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  await configFailureContext.addInitScript(installMockCredential, "direct");
+  const configFailurePage = await configFailureContext.newPage();
+  await configFailurePage.route("**/deployments/anvil.json", (route) => route.abort());
+  await configFailurePage.goto(url);
+  await configFailurePage.getByTestId("create-wallet").click();
+  await configFailurePage.getByRole("dialog").waitFor();
+  await configFailurePage.getByText(/Wallet access is available, but chain controls are unavailable/).waitFor();
+  await configFailureContext.close();
+
   console.log(JSON.stringify({
     ok: true,
     url,
     previewHeaders: { csp },
     mailbox: process.env.VITE_MAILBOX_URL,
-    screenshots: ["wallet-recovery.png", "wallet-unlocked.png", "wallet-mobile.png", "wallet-prf-unavailable.png", "wallet-prf-unsupported.png"],
-    checks: ["production CSP + WebAssembly", "registration returns PRF directly", "enabled-only registration with targeted PRF login", "create", "passkey unlock", "second passkey with distinct PRF", "synced passkey slot", "recovery slot in new browser with pagination", "mobile overflow", "no WebAuthn", "authenticator without PRF"],
+    screenshots: ["wallet-recovery.png", "wallet-unlocked.png", "wallet-pairing.png", "wallet-mobile.png", "wallet-prf-unavailable.png", "wallet-prf-unsupported.png"],
+    checks: ["production CSP + WebAssembly", "registration returns PRF directly", "enabled-only registration with targeted PRF login", "create", "passkey unlock", "second passkey with distinct PRF", "synced passkey slot", "recovery slot in new browser with pagination", "pairing URL and pairing code", "mobile overflow", "no WebAuthn", "authenticator without PRF", "passkey remains usable when deployment config fails"],
   }, null, 2));
 } finally {
   await browser.close();
   await server.close();
+  await new Promise((resolve) => rpc.close(resolve));
   await new Promise((resolve) => mailbox.close(resolve));
 }

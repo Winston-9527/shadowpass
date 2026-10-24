@@ -68,7 +68,8 @@ flowchart TD
 | `deployment` | `loadDeployment(network \| json)` | 全部 |
 | `certs` | `issueRoot(...)`、`issue(parent, ...)`、`certHash0`、`certHash` | wallet、mcp |
 | `state` | `class ChainState { static sync(client, deployment, opts) ; update() ; roots() ; issued ; revoked ; rootTree ; notes ; group }` | wallet、mcp、facilitator |
-| `witness` | `actionInput`、`registerInput`、`revokeInput`、`revokeCertInput`、`revokeKeyInput`、`transferInput`、`mintInput` | wallet、mcp |
+| `events` | `decodeShadowEvent`、`shadowEvents`、`shadowEventTopics` | wallet、mcp、facilitator |
+| `witness` | `actionInput`、`groupCommitment`、`registerInput`、`revokeInput`、`revokeCertInput`、`revokeKeyInput`、`transferInput`、`mintInput` | wallet、mcp |
 | `prove` | `loadArtifacts({ baseUrl \| dir, circuit })`（按 MANIFEST 校验）、`prove(circuit, input, artifacts)`、`verify(...)`、`toCalldata(proof, publicSignals)` | wallet、mcp、facilitator |
 | `ctx` | `ctxHash({ chainId, gate, action, memoChange })`、`reqHash({ network, asset, amount, payTo, resource })` | mcp、facilitator、x402 |
 | `notes` | `encodeNoteMemo(note, recipientBoxPk)`、`decodeNoteMemo(memo, boxSk)`、`scanNotes(state, logs, { boxSk, holderSks })` | wallet、mcp |

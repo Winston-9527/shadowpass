@@ -139,8 +139,12 @@ export interface RegisterWitnessOptions {
   ownW?: Point;
 }
 
+export function groupCommitment(human: Pick<Identity, "Ax" | "Ay">): bigint {
+  return poseidon[2]([human.Ax, human.Ay]);
+}
+
 export function registerInput({ human, cert0, domain, state, ownW }: RegisterWitnessOptions): WitnessInput {
-  const proof = state.group.proof(poseidon[2]([human.Ax, human.Ay]));
+  const proof = state.group.proof(groupCommitment(human));
   const rootOwnW = ownW ?? cert0.ownW;
   if (!rootOwnW) throw new Error("root certificate is missing own_w");
   const input = {
