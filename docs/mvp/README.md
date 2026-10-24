@@ -1,6 +1,6 @@
 # ShadowPass MVP 产品演示
 
-这条演示完全使用产品组件：钱包 PWA、两个 MCP stdio server、facilitator、信箱、x402 商家和本地 Anvil。协议层对照面板仍保留在 `docs/demo/`，可作为兜底演示。
+这条演示完全使用产品组件：钱包 PWA、一个用户可见的主 Agent、两个工具面隔离的 subagent、facilitator、信箱、x402 商家和本地 Anvil。协议层对照面板仍保留在 `docs/demo/`，可作为兜底演示。
 
 ## 一键启动
 
@@ -18,7 +18,7 @@ SHADOWPASS_PTAU=/absolute/path/to/powersOfTau28_hez_final_18.ptau \
 1. 编译并 setup `main_d2`、`main_reg`、`main_revoke`、`budget_transfer`、`budget_mint`。
 2. 启动 `anvil --block-time 1`，部署合约，并由 facilitator 预置 20 个金额 8–99 spUSD 的匿名集存款。
 3. 启动 facilitator、SQLite 信箱、x402 商家和钱包 preview。
-4. 创建 buyer/treasury 两个本地 MCP store，输出 Claude Code 命令、Claude Desktop JSON、`localhost:4173` 配对链接和配对码。
+4. 创建 buyer/treasury 两个本地 MCP store，输出 `localhost:4173` 配对链接和配对码。
 
 默认地址：
 
@@ -39,7 +39,7 @@ SHADOWPASS_PTAU=/absolute/path/to/powersOfTau28_hez_final_18.ptau \
 ```text
 检查并启动 ShadowPass MVP
 跑一遍 ShadowPass MVP 的完整 E2E
-把 buyer 和 treasury 两个 MCP 配到 Claude
+打开 ShadowPass 主 Agent
 停止 ShadowPass MVP
 ```
 
@@ -58,13 +58,31 @@ VITE_TRUST_LOCAL_ARTIFACTS=1
 
 ## 接 Claude
 
-保持 `demo:mvp` 进程运行，复制终端打印的 `claude mcp add shadowpass-buyer ...` 和 `claude mcp add shadowpass-treasury ...` 命令。配置已经包含：
+保持 `demo:mvp` 进程运行，另开一个终端执行：
+
+```bash
+npm run claude:mvp
+```
+
+这会打开唯一一个用户可见的 `shadowpass-orchestrator` 会话。主 Agent 没有
+MCP 钱包工具，只负责调度：
+
+```text
+主 Agent
+├─ shadowpass-buyer    仅 pay / wallet_status / list_receipts
+└─ shadowpass-treasury 仅 treasury_* / wallet_status / list_receipts
+```
+
+buyer 和 treasury MCP 通过 `.claude/agents/*.md` 的 `mcpServers` 内联配置，
+只在对应 subagent 启动时连接，结束即断开。启动器从 runtime manifest 注入：
 
 - `SHADOWPASS_RPC_URL`
 - `SHADOWPASS_MAILBOX`
 - `SHADOWPASS_FACILITATOR`
 - `SHADOWPASS_ARTIFACTS`
 - `SHADOWPASS_MAX_PAYMENT`
+
+子 Agent 的 `mcpServers` 内联配置已在 Claude Code 2.1.310 实测。
 
 在钱包中分别使用输出的 buyer、treasury 本地配对链接或配对码发卡。不要使用生产
 `shadowpass-wallet.vercel.app` 地址联调本地服务。详细逐步操作见 [SCRIPT.md](SCRIPT.md)。

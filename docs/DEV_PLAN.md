@@ -24,7 +24,7 @@
 | 工单拆分（#2–#13，总览 #14）、README、`docs/INTERFACES.md`、`AGENTS.md` | ✅ |
 | 演示前加固 #46（必做）：facilitator 启动、领币限流、CORS、合约 faucet 与产物托管说明 | ✅ 启动冒烟、失败不扣额度、每日可配置、CORS 预检、10,000/100 spUSD 边界和外部产物托管文档完成 |
 | #46 后续加固：本地签名、回执 pending、队列上限、metrics、MCP 状态 TTL 与配对生命周期 | ✅ 全仓 typecheck/test、merchant E2E 与钱包构建通过；Anvil 空闲区块实际从 36 增至 41，CI 见后续 PR |
-| MVP 产品演示 #55：钱包 PWA + 双 MCP + facilitator + 信箱 + 商家 | 🚧 一键启动、20 人代付匿名集、MCP stdio E2E 已跑通，最近总耗时 69.7 秒；Chrome/Touch ID 真机讲解录屏待人工完成 |
+| MVP 产品演示 #55：钱包 PWA + 单主 Agent/双 subagent + facilitator + 信箱 + 商家 | 🚧 真实 Claude 单会话调度两个工具面隔离的 subagent 已通过；20 人代付匿名集和 MCP stdio E2E 通过（69.6 秒）；Chrome/Touch ID 真机讲解录屏待人工完成 |
 | 协议层演示 #13：一键编排、票据层匿名集、采购/理财双分支、对照面板、剧本与备用录屏 | ✅ 20 笔 5–100 spUSD 模拟入金全走 relay；三次采购密文唯一、复用 #57 在途锁、真实能力拒绝、约 1% 测试收益和理财赎回 E2E 通过；24.24 秒录屏见 `docs/demo/` |
 | 域名（passkey RP ID） | ✅ `shadowpass-wallet.vercel.app` |
 | monorepo 骨架、`docs/ARCHITECTURE.md`、CI | ✅ |

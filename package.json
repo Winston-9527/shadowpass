@@ -15,8 +15,10 @@
     "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "dev:chain": "bash scripts/dev-chain.sh",
+    "claude:mvp": "bash scripts/mvp/claude.sh",
     "demo:mvp": "bash scripts/mvp/up.sh",
-    "test:mvp": "bash scripts/mvp/e2e.sh"
+    "test:mvp": "bash scripts/mvp/e2e.sh",
+    "test:mvp:agents": "node --test scripts/mvp/agents.test.mjs"
   },
   "devDependencies": {
     "@types/node": "24.3.0",

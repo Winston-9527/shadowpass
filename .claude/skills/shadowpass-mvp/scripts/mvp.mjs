@@ -101,7 +101,7 @@ function printReady(manifest) {
     merchant: manifest.merchantUrl,
     rpc: manifest.rpcUrl,
     manifest: manifestFile,
-    next: "Run `mvp.mjs configure` after user confirmation, then reopen Claude so the MCP tools load.",
+    next: "Run `npm run claude:mvp` to open the user-facing orchestrator.",
   }, null, 2));
 }
 
@@ -192,42 +192,30 @@ async function status() {
   console.log(JSON.stringify({ running, pid, manifest, health, log: logFile }, null, 2));
 }
 
-function claudeMcpExists(name) {
-  return spawnSync("claude", ["mcp", "get", name], { cwd: repo, stdio: "ignore" }).status === 0;
-}
-
-function configureOne(name, config) {
-  if (claudeMcpExists(name)) {
-    if (!flags.has("--replace")) {
-      throw new Error(`MCP ${name} already exists. Re-run with --replace after user confirmation.`);
-    }
-    const removed = spawnSync("claude", ["mcp", "remove", name], { cwd: repo, stdio: "inherit" });
-    if (removed.status !== 0) throw new Error(`Failed to remove existing MCP ${name}`);
-  }
-  const args = ["mcp", "add", name];
-  for (const [key, value] of Object.entries(config.env)) args.push("--env", `${key}=${value}`);
-  args.push("--", config.command, ...config.args);
-  const added = spawnSync("claude", args, { cwd: repo, stdio: "inherit" });
-  if (added.status !== 0) throw new Error(`Failed to add MCP ${name}`);
-}
-
 function configure() {
   const manifest = readManifest();
   if (!manifest) throw new Error("No running MVP manifest. Start the MVP first.");
+  const agentFiles = ["shadowpass-orchestrator", "shadowpass-buyer", "shadowpass-treasury"]
+    .map((name) => path.join(repo, ".claude", "agents", `${name}.md`));
+  for (const file of agentFiles) {
+    if (!fs.existsSync(file)) throw new Error(`Missing Claude agent definition: ${path.relative(repo, file)}`);
+  }
+  const configuration = {
+    mode: "single-orchestrator",
+    agents: agentFiles.map((file) => path.relative(repo, file)),
+    launch: "npm run claude:mvp",
+    isolation: {
+      orchestratorMcpTools: 0,
+      buyerTools: ["wallet_status", "list_receipts", "pay"],
+      treasuryTools: ["wallet_status", "list_receipts", "treasury_status", "treasury_supply", "treasury_withdraw"],
+    },
+  };
   if (flags.has("--dry-run")) {
-    console.log(JSON.stringify({
-      replace: flags.has("--replace"),
-      mcp: {
-        "shadowpass-buyer": manifest.mcp.buyer,
-        "shadowpass-treasury": manifest.mcp.treasury,
-      },
-    }, null, 2));
+    console.log(JSON.stringify(configuration, null, 2));
     return;
   }
   if (!checkCommand("claude")) throw new Error("Claude Code CLI is not installed");
-  configureOne("shadowpass-buyer", manifest.mcp.buyer);
-  configureOne("shadowpass-treasury", manifest.mcp.treasury);
-  console.log("Configured shadowpass-buyer and shadowpass-treasury. Restart Claude Code to load the MCP tools.");
+  console.log(JSON.stringify({ ...configuration, result: "configured" }, null, 2));
 }
 
 async function stop() {
@@ -276,7 +264,7 @@ async function main() {
   else if (command === "stop") await stop();
   else if (command === "logs") logs();
   else {
-    console.log("Usage: mvp.mjs <check|start|test|status|pairs|configure|stop|logs> [--replace|--dry-run]");
+    console.log("Usage: mvp.mjs <check|start|test|status|pairs|configure|stop|logs> [--dry-run]");
   }
 }
 

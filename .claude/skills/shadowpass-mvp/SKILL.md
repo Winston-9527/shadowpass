@@ -1,6 +1,6 @@
 ---
 name: shadowpass-mvp
-description: "Operate and validate the complete ShadowPass MVP: wallet PWA, two MCP stdio agents, facilitator, encrypted mailbox, x402 merchant, and local Anvil. Use when the user asks to start, run, test, demo, debug, integrate, or validate ShadowPass; launch the full system; pair buyer or treasury agents; issue PAY or TREASURY cards; connect Claude MCP; run an x402 purchase; supply or withdraw treasury funds; inspect bills or alerts; revoke an agent; collect E2E evidence; or rehearse the MVP demo. Triggers include '跑整个系统', '启动 MVP', '联调钱包和 MCP', '真机演示', 'shadowpass demo', 'buy EV report', 'treasury supply', and 'revoke buyer'."
+description: "Operate and validate the complete ShadowPass MVP: wallet PWA, one user-facing orchestrator with two scoped MCP subagents, facilitator, encrypted mailbox, x402 merchant, and local Anvil. Use when the user asks to start, run, test, demo, debug, integrate, or validate ShadowPass; launch the full system; pair buyer or treasury agents; issue PAY or TREASURY cards; open the single Claude orchestrator; run an x402 purchase; supply or withdraw treasury funds; inspect bills or alerts; revoke an agent; collect E2E evidence; or rehearse the MVP demo. Triggers include '跑整个系统', '启动 MVP', '联调钱包和 MCP', '真机演示', 'shadowpass demo', 'buy EV report', 'treasury supply', and 'revoke buyer'."
 argument-hint: "[check|start|test|status|configure|stop]"
 ---
 
@@ -18,7 +18,7 @@ ShadowPass MVP Progress:
 - [ ] Step 1: Select test or interactive-start mode ⚠️ REQUIRED
 - [ ] Step 2: Run environment check ⛔ BLOCKING
 - [ ] Step 3: Start the product stack or run headless E2E
-- [ ] Step 4: Configure MCP only after confirmation ⚠️ REQUIRED
+- [ ] Step 4: Validate scoped subagents, then open one Claude session
 - [ ] Step 5: Guide the human wallet and Claude flow
 - [ ] Step 6: Report evidence and distinguish recording status
 - [ ] Step 7: Stop services only after confirmation ⚠️ REQUIRED
@@ -73,19 +73,26 @@ Wait for `result: "ready"`. Report these values:
 
 Open the wallet with the exact `http://localhost:4173` URL. Do not substitute `127.0.0.1` because passkey RP IDs differ.
 
-## Step 4: Configure Claude MCP ⚠️ REQUIRED
+## Step 4: Open the Claude Orchestrator
 
-Ask the user whether to replace existing `shadowpass-buyer` or `shadowpass-treasury` MCP entries. Only after explicit confirmation run:
+The two MCP servers are inline in `.claude/agents/` and are loaded only inside
+their buyer or treasury subagent. The user-facing orchestrator has no MCP tools.
+
+Validate the definitions:
 
 ```bash
-node .claude/skills/shadowpass-mvp/scripts/mvp.mjs configure
+node .claude/skills/shadowpass-mvp/scripts/mvp.mjs configure --dry-run
 ```
 
-If replacement was explicitly approved, add `--replace`.
+Then open the single user-facing session:
 
-Use `--dry-run` when the user wants to inspect the MCP configuration without changing Claude settings.
+```bash
+npm run claude:mvp
+```
 
-After configuration, tell the user to restart Claude Code so the two MCP servers and their tools reload. Do not claim tools are available in the current session before restart.
+Do not tell the user to open separate buyer and treasury conversations. The main
+orchestrator should delegate to `shadowpass-buyer` and
+`shadowpass-treasury`.
 
 ## Step 5: Guide the Human Flow
 
@@ -96,23 +103,16 @@ Wallet:
 3. Issue buyer with PAY and budget 40.
 4. Issue treasury with TREASURY and budget 50.
 
-Claude purchase prompt:
+Combined natural-language prompt:
 
 ```text
-Call pay for http://127.0.0.1:4021/report with maxAmount 2000000.
+用采购卡帮我买一份 EV 市场报告，最多花 2 USDC；再从理财卡里拿 20 spUSD，存进本地演示金库，放一天。
 ```
 
-Treasury prompts:
+Treasury maturity prompt:
 
 ```text
-Call treasury_supply with the vault from deployments/anvil.json, amount 20000000, termSeconds 86400.
-Call treasury_status and report the positionId.
-```
-
-After advancing Anvil time by 86401 seconds and mining one block:
-
-```text
-Call treasury_withdraw for that positionId.
+现在到期了，推进本地演示时间，然后让理财 Agent 赎回刚才的仓位。
 ```
 
 Wallet verification:
@@ -162,7 +162,7 @@ node .claude/skills/shadowpass-mvp/scripts/mvp.mjs logs
 
 - Do not tell the user to run the six-step flow manually without first running `check`.
 - Do not use production wallet URLs while the local stack is running.
-- Do not run `configure --replace` without explicit approval.
+- Do not tell the user to open separate buyer and treasury conversations.
 - Do not call the automated passkey flow “real Touch ID.”
 - Do not leave background services running silently after the user finishes.
 - Do not copy protocol-layer demo evidence as product-MVP evidence.
@@ -172,7 +172,7 @@ node .claude/skills/shadowpass-mvp/scripts/mvp.mjs logs
 - [ ] `check` returned `ok: true`
 - [ ] `start` returned `result: ready` or `test` returned `result: ok`
 - [ ] local `localhost:4173` pairing links were used
-- [ ] MCP replacement was explicitly approved before `--replace`
+- [ ] scoped subagent definitions validated
 - [ ] transaction hashes or test log path were reported
 - [ ] real Touch ID recording status was stated accurately
 - [ ] background processes were stopped when requested

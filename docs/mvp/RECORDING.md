@@ -12,7 +12,7 @@
 ## 录屏前
 
 1. 执行 `npm run demo:mvp` 并等待所有服务 ready。
-2. 完成两条 `claude mcp add`，确认 Claude 会话能看到 `pay`、`treasury_supply`、`treasury_withdraw`。
+2. 执行 `npm run claude:mvp`，确认只有一个用户可见会话；主 Agent 负责调度，buyer/treasury MCP 只在 subagent 内加载。
 3. 关闭通知、书签栏和其他无关标签。
 4. 确认 wallet 是全新浏览器 profile，或清除本地钱包数据后重新开始。
 5. 按 `docs/mvp/SCRIPT.md` 排练至少一次。
@@ -22,7 +22,7 @@
 - 真 Touch ID 创建/解锁。
 - 100 USDC 入金。
 - buyer 与 treasury 两次配对和发卡。
-- Claude 实际调用采购 MCP 并返回报告内容。
+- 主 Agent 实际调度 buyer subagent，采购 MCP 返回报告内容。
 - treasury MCP 的 supply 和 withdraw。
 - 钱包 Bills 页面显示两条分支与未上报提醒。
 - 钱包吊销 buyer；buyer 再付款失败；treasury 仍 active。

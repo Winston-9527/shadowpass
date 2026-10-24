@@ -24,7 +24,11 @@ Use the runtime manifest or `pairs` command. The local form is `http://localhost
 
 ## Claude MCP tools do not appear
 
-Run `configure` after approval, then restart Claude Code. Verify with `claude mcp list`. Local MCP configuration is not reloaded into an already-running session.
+Run `node .claude/skills/shadowpass-mvp/scripts/mvp.mjs configure --dry-run`
+to confirm the three agent files are present. Launch the user-facing session with
+`npm run claude:mvp`, not `claude mcp add`. The buyer and treasury MCP servers
+are scoped to their subagents. If a previous Claude session is still open, exit
+it before launching the orchestrator so newly created agent files are loaded.
 
 ## Process exits during startup
 
