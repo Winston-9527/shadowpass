@@ -17,8 +17,10 @@
     "dev:chain": "bash scripts/dev-chain.sh",
     "claude:mvp": "bash scripts/mvp/claude.sh",
     "demo:mvp": "bash scripts/mvp/up.sh",
+    "explorer:mvp": "node --import tsx scripts/mvp/explorer.mjs",
     "test:mvp": "bash scripts/mvp/e2e.sh",
-    "test:mvp:agents": "node --test scripts/mvp/agents.test.mjs"
+    "test:mvp:agents": "node --test scripts/mvp/agents.test.mjs",
+    "test:mvp:explorer": "node --import tsx --test scripts/mvp/explorer.test.mjs"
   },
   "devDependencies": {
     "@types/node": "24.3.0",

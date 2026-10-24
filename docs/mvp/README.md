@@ -87,6 +87,40 @@ buyer 和 treasury MCP 通过 `.claude/agents/*.md` 的 `mcpServers` 内联配�
 在钱包中分别使用输出的 buyer、treasury 本地配对链接或配对码发卡。不要使用生产
 `shadowpass-wallet.vercel.app` 地址联调本地服务。详细逐步操作见 [SCRIPT.md](SCRIPT.md)。
 
+## 简易链上浏览器
+
+MVP 运行时可以另开一个终端查看 Agent 与链的交互：
+
+```bash
+npm run explorer:mvp
+```
+
+持续刷新：
+
+```bash
+npm run explorer:mvp -- --watch
+```
+
+只查看采购 Agent：
+
+```bash
+npm run explorer:mvp -- --agent buyer
+```
+
+输出包括：
+
+- Agent 的 `PAY` / `TREASURY` 能力位、卡片限额、剩余预算和单笔上限
+- 真实 `Executed` 交易、执行账户、method、金额、budget nullifier 和主人密文段数
+- 票据层匿名集、根身份层匿名集和 facilitator 执行账户
+- 最近的签发、入金、花费、撤销和群组事件
+
+脚本只输出公开链字段和 Agent 本地公开状态，不输出 `secrets.json` 中的私钥。
+脚本化读取 JSON 时使用：
+
+```bash
+npm run --silent explorer:mvp -- --json > scripts/mvp/.runtime/chain-report.json
+```
+
 ## 无界面 E2E
 
 ```bash
