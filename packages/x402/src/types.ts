@@ -10,7 +10,6 @@ import type {
 } from "@x402/core/types";
 
 export const SHADOWPASS_SCHEME = "shadowpass" as const;
-export const SHADOWPASS_NETWORK = "eip155:84532" as const;
 export const SHADOWPASS_ASSET_DECIMALS = 6;
 export const PAY_METHOD = keccak256(toHex("shadowpass.PAY")).slice(0, 10) as Hex;
 
@@ -88,6 +87,7 @@ export interface ShadowpassFacilitatorCoreOptions {
   signers: Address[];
   clockSkewSeconds?: number;
   merchantRateLimit?: { limit: number; windowMs: number };
+  settlementLockTtlMs?: number;
 }
 
 export type RelayAction =

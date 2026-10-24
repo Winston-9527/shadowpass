@@ -12,6 +12,8 @@ import {
   createSerializedSender,
   revertName,
   shadowErrorAbi,
+  TransactionPendingError,
+  TransactionQueueFullError,
   type GateClient,
   type PaymentChainView,
   type Roots,
@@ -285,6 +287,26 @@ describe("facilitator settlement", () => {
       errorReason: "merchant_rate_limited",
     });
   });
+
+  it("keeps a nullifier pending when receipt polling fails after broadcast", async () => {
+    const view = chainView();
+    const gate = gateClient(view);
+    gate.sendExecute = async () => { throw new TransactionPendingError(TX); };
+    const facilitator = new ShadowpassFacilitatorCore({
+      gateClient: gate,
+      chainView: view,
+      signers: [MERCHANT],
+    });
+    await expect(facilitator.settle(payment(), requirements())).resolves.toMatchObject({
+      success: false,
+      errorReason: "transaction_pending",
+      transaction: TX,
+    });
+    await expect(facilitator.settle(payment(), requirements())).resolves.toMatchObject({
+      success: false,
+      errorReason: "nullifier_pending",
+    });
+  });
 });
 
 describe("schemas and serialized sender", () => {
@@ -301,6 +323,37 @@ describe("schemas and serialized sender", () => {
     const walletClient = { account: { address: MERCHANT } } as any;
     const gate = new ViemGateClient({ publicClient, walletClient, deployment: DEPLOYMENT });
     await expect((gate as any).sender.write(async () => TX)).rejects.toThrow("transaction_reverted");
+  });
+
+  it("uses 300 ms receipt polling and preserves the hash when polling fails", async () => {
+    let pollingInterval: number | undefined;
+    const publicClient = {
+      async waitForTransactionReceipt(args: { pollingInterval?: number }) {
+        pollingInterval = args.pollingInterval;
+        throw new Error("rpc disconnected");
+      },
+    } as any;
+    const walletClient = { account: { address: MERCHANT } } as any;
+    const sender = createSerializedSender(publicClient, walletClient);
+    await expect(sender.write(async () => TX)).rejects.toMatchObject({
+      name: "transaction_pending",
+      transaction: TX,
+    });
+    expect(pollingInterval).toBe(300);
+  });
+
+  it("caps the per-wallet transaction queue", async () => {
+    const publicClient = {
+      async waitForTransactionReceipt() {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { status: "success", blockNumber: 1n, logs: [] };
+      },
+    } as any;
+    const walletClient = { account: { address: "0x00000000000000000000000000000000000000aa" } } as any;
+    const sender = createSerializedSender(publicClient, walletClient, { maxQueueLength: 1 });
+    const first = sender.write(async () => TX);
+    await expect(sender.write(async () => TX)).rejects.toBeInstanceOf(TransactionQueueFullError);
+    await first;
   });
 
   it("serializes wallet writes so concurrent notes do not collide on nonce", async () => {
@@ -340,5 +393,13 @@ describe("schemas and serialized sender", () => {
       functionName: "execute",
     });
     expect(revertName(error)).toBe("BadClock");
+
+    const treasury = encodeErrorResult({ abi: shadowErrorAbi, errorName: "BeforeMaturity" });
+    const treasuryError = new ContractFunctionRevertedError({
+      abi: shadowErrorAbi,
+      data: treasury,
+      functionName: "withdraw",
+    });
+    expect(revertName(treasuryError)).toBe("BeforeMaturity");
   });
 });

@@ -5,9 +5,13 @@ import { AgentStore, CredentialStoreError } from "../src/store.js";
 import { createFixture } from "./fixtures.js";
 
 describe("AgentStore", () => {
-  it("creates 0700/0600 key files and a pairing code with a one-time secret", async () => {
+  it("creates 0700/0600 key files and consumes the one-time pairing secret", async () => {
     const fixture = await createFixture();
+    const pairingBefore = fixture.store.pairingSecret;
+    expect(fixture.store.isPaired).toBe(false);
     await fixture.store.saveBundle(fixture.bundle, { pair: fixture.store.pairingSecret });
+    expect(fixture.store.isPaired).toBe(true);
+    expect(fixture.store.pairingSecret).not.toBe(pairingBefore);
     await fixture.store.addReceipt({
       budgetNf: "1",
       tx: "0x1",
@@ -31,6 +35,7 @@ describe("AgentStore", () => {
     const raw = await readFile(fixture.store.paths.secrets, "utf8");
     expect(raw).toContain("holderPrv");
     expect(raw).toContain(fixture.store.pairingSecret);
+    expect(raw).not.toContain(pairingBefore);
     const pairing = buildPairing(fixture.store);
     expect(pairing.url.startsWith("https://shadowpass-wallet.vercel.app/pair#")).toBe(true);
     expect(pairing.code).not.toContain("holderPrv");

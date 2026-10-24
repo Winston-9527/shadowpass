@@ -10,7 +10,6 @@ import type {
 import { reqHash } from "@shadowpass/sdk";
 import {
   PAY_METHOD,
-  SHADOWPASS_NETWORK,
   SHADOWPASS_SCHEME,
   type CalldataProof,
   type ShadowpassPayload,
@@ -84,12 +83,12 @@ export class ShadowpassClientScheme implements SchemeNetworkClient {
 export interface CreateShadowpassClientOptions {
   builder: ShadowpassPaymentBuilder;
   spendControls: SpendControls | false;
-  network?: Network;
+  network: Network;
 }
 
 export function createShadowpassClient(options: CreateShadowpassClientOptions): x402Client {
   const scheme = new ShadowpassClientScheme(options.builder);
-  const network = options.network ?? SHADOWPASS_NETWORK;
+  const network = options.network;
   return x402Client
     .fromConfig({
       schemes: [{ network, client: scheme }],

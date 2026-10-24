@@ -13,7 +13,9 @@ export interface FacilitatorConfig {
   privateKey: Hex;
   deployment: Deployment;
   port?: number;
+  host?: string;
   clockSkewSeconds?: number;
+  settlementLockTtlMs?: number;
   merchantRateLimit?: { limit: number; windowMs: number };
   relayRateLimit?: {
     perMinute?: number;
@@ -22,6 +24,7 @@ export interface FacilitatorConfig {
   };
   paymentRateLimit?: { perMinute?: number };
   corsOrigins?: string[];
+  metricsToken?: string;
 }
 
 export async function startFacilitator(config: FacilitatorConfig): Promise<{
@@ -36,6 +39,7 @@ export async function startFacilitator(config: FacilitatorConfig): Promise<{
     deployment: config.deployment,
     clockSkewSeconds: config.clockSkewSeconds,
     merchantRateLimit: config.merchantRateLimit,
+    settlementLockTtlMs: config.settlementLockTtlMs,
   });
   const facilitator = new x402Facilitator().register(
     `eip155:${config.deployment.chainId}`,
@@ -59,9 +63,10 @@ export async function startFacilitator(config: FacilitatorConfig): Promise<{
       perMinute: config.paymentRateLimit?.perMinute,
     },
     corsOrigins: config.corsOrigins,
+    metricsToken: config.metricsToken,
   });
   const server = await new Promise<Server>((resolve) => {
-    const listening = app.listen(config.port ?? 4022, () => resolve(listening));
+    const listening = app.listen(config.port ?? 4022, config.host ?? "127.0.0.1", () => resolve(listening));
   });
   return { app, server };
 }
@@ -88,6 +93,8 @@ export async function main(): Promise<void> {
     privateKey: required("FACILITATOR_PK") as Hex,
     deployment,
     port: Number(process.env.PORT ?? 4022),
+    host: process.env.FACILITATOR_HOST ?? "127.0.0.1",
+    settlementLockTtlMs: Number(process.env.SETTLEMENT_LOCK_TTL_MS ?? 300_000),
     merchantRateLimit: {
       limit: Number(process.env.FACILITATOR_RATE_LIMIT ?? 60),
       windowMs: Number(process.env.FACILITATOR_RATE_WINDOW_MS ?? 60_000),
@@ -101,11 +108,13 @@ export async function main(): Promise<void> {
       perMinute: Number(process.env.PAYMENT_RATE_LIMIT ?? 120),
     },
     corsOrigins,
+    metricsToken: process.env.FACILITATOR_METRICS_TOKEN,
   });
   console.log(JSON.stringify({
     type: "shadowpass.facilitator.started",
     network,
     port: (server.address() as any)?.port,
+    host: process.env.FACILITATOR_HOST ?? "127.0.0.1",
     relayFaucetPerDay,
     corsOrigins: corsOrigins.length ? corsOrigins : undefined,
   }));
