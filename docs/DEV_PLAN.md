@@ -16,7 +16,7 @@
 | C1 钱包骨架：PWA、passkey + PRF、SDK key 派生、`/slot` 恢复 | 🚧 #10，等待真实 Chrome/Google 密码管理器与 Vercel 证据 |
 | C2 钱包开通与发卡：群组、注册证明、充值、配对发卡、授权树、恢复 | 🚧 #11，第三轮 review 修复已完成；真实链与双标签页自动化通过；真机 MetaMask/Touch ID/扫码与 Base Sepolia 待补 |
 | C3 钱包账单与吊销：主人密文解密、收据对账、异常提醒、Agent/整树吊销 | 🚧 #12，55/55 单元测试；增量同步、信箱游标、委托归属、30 秒防误报、页面关闭后补报、双标签页两次 Chrome 链测试、吊销竞争重试和真实 D2 付款通过；真机录屏待补 |
-| B2 MCP：stdio、本地密钥、配对、凭证同步、x402 付款与状态 | 🚧 #7 第 2 步，40/40 测试通过；`pay` 已接 SDK witness、本地预验证、找零落盘和 `@x402/fetch`；真实 anvil E2E 与 `treasury`/`delegate` 待后续 |
+| B2 MCP：stdio、本地密钥、配对、凭证同步、x402 付款与状态 | 🚧 #54：46/46 测试；理财 `supply/status/withdraw` 已接 quote、真实 D2、relay、找零/仓位落盘和链上票据恢复；anvil 并发存入、到期赎回与主人三跳解密通过；`delegate` 待后续 |
 | B4 加密信箱：消息箱与独立备份槽、SQLite/Upstash、限流、serverless 入口 | 🚧 #9，审查修复与服务端测试通过；固定线上地址和真实 Upstash 待验收 |
 | A3 核心合约：Gate、Group、Registry、Revocations | ✅ #3，真实证明 30/30；gas 中位数：register 346,668、issue 98,604、deposit 360,961、transferBudget 479,017、execute D2 549,916、revoke 254,361 |
 | A4 应用合约：Payout、TreasuryAdapter、MockVault、ShadowToken | ✅ #4，Foundry 46/46；真实 Gate `TREASURY_SUPPLY → withdraw → NoteMemo` 集成通过 |

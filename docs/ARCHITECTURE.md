@@ -87,7 +87,7 @@ flowchart TD
 
 - `src/store.ts`：本地数据目录（默认 `~/.shadowpass/agents/<name>/`，权限 0700，文件 0600），保存 holder 私钥、信箱私钥、凭证包、票据、收据游标。
 - `src/payment-builder.ts`：实现 `ShadowpassPaymentBuilder`（§8.4 的 5 个步骤）。
-- `src/server.ts`：MCP 工具 `wallet_status`、`pay`、`list_receipts`、`treasury_supply`、`treasury_status`（P1：`delegate`）。
+- `src/server.ts`：MCP 工具 `wallet_status`、`pay`、`list_receipts`、`treasury_supply`、`treasury_status`、`treasury_withdraw`（P1：`delegate`）。
 - 链上状态：`sdk.state.ChainState`，地址从 `deployments/<network>.json` 读取。
 
 ## 4. 证明产物的分发

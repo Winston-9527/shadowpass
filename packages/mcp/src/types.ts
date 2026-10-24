@@ -70,8 +70,37 @@ export interface TreasurySupplyRequest {
 export interface TreasurySupplyResult {
   positionId: string;
   tx: string;
+  budgetNf: string;
   expectedQ: string;
   returnCm: string;
+  maturity: string;
+  resource: string;
+  timings?: { proofMs: number };
+  warnings?: string[];
+}
+
+export interface TreasuryWithdrawResult {
+  positionId: string;
+  tx: string;
+  expectedQ: string;
+  returnCm: string;
+  recovered: boolean;
+  warnings?: string[];
+}
+
+export interface StoredTreasuryPosition {
+  positionId: string;
+  vault: string;
+  amount: string;
+  expectedQ: string;
+  maturity: string;
+  returnCm: string;
+  returnMemo: string;
+  returnNote: CertificateBundle["note"];
+  openTx: string;
+  openedAt: string;
+  withdrawn: boolean;
+  withdrawTx?: string;
 }
 
 export interface DelegateRequest {
@@ -93,6 +122,7 @@ export interface McpServices {
   };
   treasury?: {
     supply(request: TreasurySupplyRequest): Promise<TreasurySupplyResult>;
+    withdraw(positionId: bigint): Promise<TreasuryWithdrawResult>;
     status(): Promise<Record<string, unknown>>;
   };
   delegate?: {

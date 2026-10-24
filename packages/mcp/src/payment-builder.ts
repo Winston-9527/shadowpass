@@ -30,7 +30,6 @@ import type {
 import {
   PAY_METHOD,
   SHADOWPASS_SCHEME,
-  assembleShadowpassPayload,
   type ShadowpassPaymentBuilder,
   type ShadowpassPayload,
 } from "@shadowpass/x402";
@@ -91,6 +90,14 @@ export interface BuiltShadowpassPayment {
   note: Note;
   change: Note;
   budgetNf: bigint;
+}
+
+export interface ShadowpassActionRequest {
+  target: Hex;
+  method: Hex;
+  amount: bigint;
+  params: Hex;
+  reqCap: bigint;
 }
 
 export class PaymentBuilderError extends Error {
@@ -160,14 +167,7 @@ export class ShadowpassAgentPaymentBuilder implements ShadowpassPaymentBuilder {
   }
 
   async buildPayment(requirements: PaymentRequirements, resourceUrl: string): Promise<ShadowpassPayload> {
-    this.lastPayment = undefined;
     const amount = this.validateRequirements(requirements, resourceUrl);
-    const bundle = await this.options.store.loadBundle();
-    if (!bundle) throw new PaymentBuilderError("not_paired");
-    if (bundle.chain.length > 3) throw new PaymentBuilderError("unsupported_chain_depth");
-
-    const note = await this.selectNote(bundle, amount);
-    const chain = bundle.chain.map(certFromBundle);
     const requestHash = reqHash({
       network: requirements.network,
       asset: requirements.asset as Hex,
@@ -175,16 +175,35 @@ export class ShadowpassAgentPaymentBuilder implements ShadowpassPaymentBuilder {
       payTo: requirements.payTo as Hex,
       resource: resourceUrl,
     });
-    const nonce = this.randomScalar(1n << 248n);
-    const action: Action = {
+    return this.buildAction({
       target: requirements.extra!.payout as Hex,
       method: requirements.extra!.method as Hex,
       amount,
-      nonce,
       params: encodeAbiParameters(
         [{ type: "address" }, { type: "bytes32" }],
         [requirements.payTo as Hex, requestHash],
       ),
+      reqCap: 1n,
+    });
+  }
+
+  async buildAction(request: ShadowpassActionRequest): Promise<ShadowpassPayload> {
+    this.lastPayment = undefined;
+    if (request.amount <= 0n) throw new PaymentBuilderError("invalid_payment_amount");
+    if (request.reqCap <= 0n || request.reqCap > 3n) throw new PaymentBuilderError("capability_mismatch");
+    const bundle = await this.options.store.loadBundle();
+    if (!bundle) throw new PaymentBuilderError("not_paired");
+    if (bundle.chain.length > 3) throw new PaymentBuilderError("unsupported_chain_depth");
+
+    const note = await this.selectNote(bundle, request.amount);
+    const chain = bundle.chain.map(certFromBundle);
+    const nonce = this.randomScalar(1n << 248n);
+    const action: Action = {
+      target: request.target,
+      method: request.method,
+      amount: request.amount,
+      nonce,
+      params: request.params,
     };
 
     const encryptionR = this.randomScalar(L);
@@ -192,7 +211,7 @@ export class ShadowpassAgentPaymentBuilder implements ShadowpassPaymentBuilder {
     const changeRho = this.randomScalar(1n << 250n);
     const expectedChange: Note = {
       own: [note.own[0], note.own[1]],
-      q: note.q - amount,
+      q: note.q - request.amount,
       lin: [note.lin[0], note.lin[1], note.lin[2], note.lin[3]],
       rho: changeRho,
     };
@@ -210,9 +229,9 @@ export class ShadowpassAgentPaymentBuilder implements ShadowpassPaymentBuilder {
       chain,
       holderSk: this.options.store.holder.sk,
       note,
-      qSpent: amount,
+      qSpent: request.amount,
       ctxHash: contextHash,
-      reqCap: 1n,
+      reqCap: request.reqCap,
       now,
       state: this.options.state,
       random: (length) => {
@@ -248,27 +267,33 @@ export class ShadowpassAgentPaymentBuilder implements ShadowpassPaymentBuilder {
     const roots = this.options.state.roots();
     const noteRoot = this.options.state.notes.proof(noteCm(note)).root;
     const budgetNf = budgetNullifier(this.options.store.holder.sk, note);
-    const payload = assembleShadowpassPayload({
-      requirements,
-      resourceUrl,
+    const ct = ownerCiphertextCalldata(witness.ct).map(String);
+    const payload: ShadowpassPayload = {
+      D: ct.length - 6,
       proof,
       roots: {
         issued: roots.issued.toString(),
         revoked: roots.revoked.toString(),
         root: roots.root.toString(),
       },
-      nowTs: now,
-      nonce,
-      ct: ownerCiphertextCalldata(witness.ct).map(String),
+      nowTs: now.toString(),
+      action: {
+        target: action.target,
+        method: action.method,
+        amount: action.amount.toString(),
+        nonce: action.nonce.toString(),
+        params: action.params,
+      },
+      ct,
       budget: {
         noteRoot: noteRoot.toString(),
         budgetNf: budgetNf.toString(),
         cmChange: noteCm(witness.change).toString(),
-        qSpent: amount.toString(),
+        qSpent: request.amount.toString(),
       },
       memoChange,
-    });
-    payload.timings = { proofMs };
+      timings: { proofMs },
+    };
     this.lastPayment = { payload, note, change: witness.change, budgetNf };
     return payload;
   }

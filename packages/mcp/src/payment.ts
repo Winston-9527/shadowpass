@@ -7,6 +7,7 @@ import {
   type BuiltShadowpassPayment,
   type PaymentProver,
 } from "./payment-builder.js";
+import { SerialTaskQueue } from "./execution.js";
 import { noteToStored } from "./notes.js";
 import type { AgentStore } from "./store.js";
 import { McpToolError, type McpServices, type PaymentRequest, type PaymentResult } from "./types.js";
@@ -24,6 +25,7 @@ export interface ShadowpassPaymentServiceOptions {
   prover?: PaymentProver;
   fetch?: typeof globalThis.fetch;
   builderFactory?: (maxAmount: bigint) => McpPaymentBuilder;
+  queue?: SerialTaskQueue;
 }
 
 const builderErrorCodes = [
@@ -160,13 +162,14 @@ async function readResourceContent(response: Response): Promise<{ text: string; 
 }
 
 export class ShadowpassPaymentService implements NonNullable<McpServices["payment"]> {
-  private queue: Promise<void> = Promise.resolve();
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly builderFactory: (maxAmount: bigint) => McpPaymentBuilder;
+  private readonly queue: SerialTaskQueue;
 
   constructor(private readonly options: ShadowpassPaymentServiceOptions) {
     if (options.maxPayment <= 0n) throw new Error("maxPayment must be positive");
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.queue = options.queue ?? new SerialTaskQueue();
     this.builderFactory = options.builderFactory ?? ((maxAmount) => {
       const state = options.state();
       if (!state) throw new PaymentBuilderError("chain_state_unavailable");
@@ -188,12 +191,7 @@ export class ShadowpassPaymentService implements NonNullable<McpServices["paymen
     if (request.maxAmount > this.options.maxPayment) {
       return Promise.reject(new McpToolError("spend_limit", "spend_limit"));
     }
-    const run = this.queue.then(
-      () => this.payOnce(request),
-      () => this.payOnce(request),
-    );
-    this.queue = run.then(() => undefined, () => undefined);
-    return run;
+    return this.queue.run(() => this.payOnce(request));
   }
 
   private async payOnce(request: PaymentRequest): Promise<PaymentResult> {
