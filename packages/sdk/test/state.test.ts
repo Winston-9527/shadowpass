@@ -100,6 +100,82 @@ describe("ChainState", () => {
     expect(calls.slice(-3).map((call) => call.fromBlock)).toEqual([0n, 2n, 4n]);
   });
 
+  function branchLogs(leaf: bigint) {
+    const emptyRevokedRoot = new ChainState().revoked.root;
+    return [
+      { eventName: "Issued", args: { certHash: leaf, index: 0, root: leaf }, blockNumber: 1n, logIndex: 0 },
+      { eventName: "Registered", args: { nf: leaf, leaf0: leaf, index: 0, root: leaf }, blockNumber: 1n, logIndex: 1 },
+      { eventName: "Joined", args: { commitment: leaf, index: 0, root: leaf }, blockNumber: 1n, logIndex: 2 },
+      { eventName: "NoteInserted", args: { cm: leaf, index: 0, root: leaf }, blockNumber: 1n, logIndex: 3 },
+      { eventName: "NoteMemo", args: { cm: leaf, memo: "0x0102" }, blockNumber: 1n, logIndex: 4 },
+      { eventName: "NullifierSpent", args: { nullifier: leaf }, blockNumber: 1n, logIndex: 5 },
+      {
+        eventName: "StateRegistered",
+        args: { issued: leaf, revoked: emptyRevokedRoot, root: leaf, stateRoot: stateRoot(leaf, emptyRevokedRoot, leaf) },
+        blockNumber: 1n,
+        logIndex: 6,
+      },
+    ];
+  }
+
+  function companionSnapshot(state: ChainState) {
+    return {
+      memos: [...state.memos].map(([key, value]) => [key, [...value]]),
+      spentNullifiers: [...state.spentNullifiers],
+      registeredStateRoots: [...state.registeredStateRoots],
+    };
+  }
+
+  it("rolls back companion collections with trees when a same-height branch is replaced", async () => {
+    let logs = branchLogs(11n);
+    const client = {
+      async getLogs() { return logs; },
+      async getBlockNumber() { return 1n; },
+    };
+    const state = await ChainState.sync(client, deployment);
+    const old = companionSnapshot(state);
+    expect(old.memos).toEqual([["11", [1, 2]]]);
+    expect(old.spentNullifiers).toEqual(["11"]);
+    expect(old.registeredStateRoots).toHaveLength(1);
+
+    logs = branchLogs(22n);
+    await state.update();
+
+    const expected = ChainState.fromLogs(deployment, logs);
+    expect(state.roots()).toEqual(expected.roots());
+    expect(companionSnapshot(state)).toEqual(companionSnapshot(expected));
+    expect(state.memos.has("11")).toBe(false);
+    expect(state.spentNullifiers.has("11")).toBe(false);
+    for (const root of old.registeredStateRoots) expect(state.registeredStateRoots.has(root)).toBe(false);
+    expect(state.lastBlock).toBe(1n);
+  });
+
+  it("keeps companion collections, trees and cursor unchanged when a later page fails", async () => {
+    let latest = 1n;
+    let fail = false;
+    const ranges: bigint[] = [];
+    const client = {
+      async getLogs(args: { fromBlock: bigint }) {
+        ranges.push(args.fromBlock);
+        if (fail && args.fromBlock === 2n) throw new Error("later page failed");
+        return branchLogs(fail ? 22n : 11n);
+      },
+      async getBlockNumber() { return latest; },
+    };
+    const state = await ChainState.sync(client, deployment, { maxBlockRange: 2 });
+    const before = { roots: state.roots(), companions: companionSnapshot(state), lastBlock: state.lastBlock };
+    ranges.length = 0;
+    latest = 3n;
+    fail = true;
+
+    await expect(state.update()).rejects.toThrow("later page failed");
+
+    expect(ranges).toEqual([0n, 2n]);
+    expect(state.roots()).toEqual(before.roots);
+    expect(companionSnapshot(state)).toEqual(before.companions);
+    expect(state.lastBlock).toBe(before.lastBlock);
+  });
+
   it("decodes raw viem topics/data and rejects unknown events", () => {
     const topics = encodeEventTopics({ abi: shadowEvents, eventName: "Joined", args: { commitment: 7n } });
     const data = encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [0n, 7n]);
